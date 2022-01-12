@@ -899,7 +899,7 @@ void pushInfoTopRight()
 
 void drawCanvas(sprite_struct *tile_cache[], st_idx_coords &display_center_idx_coords)
 {
-    // canvas.fillSprite(NO_TILE_COLOR);
+    canvas.fillSprite(NO_TILE_COLOR);
     pushTileCache(tile_cache, display_center_idx_coords);
     pushDirIcon(gps.course.deg(), curr_gps_idx_coords, display_center_idx_coords, is_gps_active);
     pushInfoTopRight();
