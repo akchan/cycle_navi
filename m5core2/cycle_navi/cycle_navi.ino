@@ -179,12 +179,13 @@ int calcCoords2TileCoords(st_tile_coords &tile_coords, int zoom, double lon,
         {
             rad = lat / 180.0 * M_PI;
             y_raw = r * log((1.0 + sin(rad)) / cos(rad));
-        } else if (method == 3)
+        }
+        else if (method == 3)
         {
             rad = lat / 180.0 * M_PI;
             y_raw = r * log(1.0 / cos(rad) + tan(rad));
         }
-        
+
         tile_coords.zoom = zoom;
         tile_coords.tile_x = (int)floor(x_raw * (1 << zoom));
         tile_coords.tile_y = (int)floor((0.5 - y_raw) * (1 << zoom));
@@ -699,7 +700,7 @@ void pushTileCache(sprite_struct *tile_cache[], st_idx_coords &idx_coords)
 
             if (xSemaphoreTake(tile_cache[i]->mutex, pdMS_TO_TICKS(0)))
             {
-                
+
                 tile_cache[i]->sprite->pushSprite(offset_x, offset_y);
 
                 // unlock the tile
@@ -897,12 +898,36 @@ void pushInfoTopRight()
     }
 }
 
+void pushInfoTopLeft()
+{
+    // Character size
+    // size 1: w6,  h8
+    // size 2: w12, h16
+    int pad = 1;
+    int w = pad + 12 * 5 + pad + 6 * 4 + pad;
+    int h = pad + 16 + pad;
+
+    canvas.fillRect(0, 0, w, h, TFT_BLACK);
+
+    double speed = is_gps_active ? gps.speed.kmph() : 0.0;
+
+    canvas.setCursor(pad, pad);
+    canvas.setTextSize(2);
+    canvas.setTextColor(WHITE, BLACK);
+    canvas.printf("%5.1f", speed);
+
+    canvas.setCursor(pad + 12 * 5 + pad, pad + 12-6);
+    canvas.setTextSize(1);
+    canvas.print("km/h");
+}
+
 void drawCanvas(sprite_struct *tile_cache[], st_idx_coords &display_center_idx_coords)
 {
     canvas.fillSprite(NO_TILE_COLOR);
     pushTileCache(tile_cache, display_center_idx_coords);
     pushDirIcon(gps.course.deg(), curr_gps_idx_coords, display_center_idx_coords, is_gps_active);
     pushInfoTopRight();
+    pushInfoTopLeft();
     pushButtonLabels();
     canvas.pushSprite(0, 0);
 }
@@ -1312,7 +1337,7 @@ void loop()
                 playGPSInactive();
                 Serial.println("loop(): playGPSInactive() was invoked.");
             }
-            
+
             Serial.println("loop()  GPS is unavailable.");
             is_gps_active = false;
             gps_count++;
