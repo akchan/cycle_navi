@@ -43,6 +43,7 @@ unsigned long interval_ms = interval_sec * 1000;
 unsigned long t_prev, t_curr;
 bool is_gps_active = false;
 const int gps_count_th = 3;
+bool isUpdatedPrev = false;
 int gps_count = 0;
 
 struct st_tile_coords
@@ -123,6 +124,7 @@ const int brightness_list[] = {255, 128, 64, 32};
 const int n_brightness = 4;
 int i_brightness = 0;
 
+#define LEN_QUEUE n_sprite * 2
 struct st_updateTileQueueData
 {
     sprite_struct *p_sprite_struct;
@@ -977,29 +979,29 @@ void updateTileTask(void *arg)
             }
             else
             {
-            // lock the tile
-            if (xSemaphoreTake(p_sprite_struct->mutex, (TickType_t)0))
-            {
-                // We now have the semaphore and can access the shared resource.
-                loadTile(p_sprite_struct->sprite, zoom, tile_x, tile_y);
-                loadRoute(p_sprite_struct->sprite, zoom, tile_x, tile_y);
-                loadPoint(p_sprite_struct->sprite, zoom, tile_x, tile_y);
-
-                p_sprite_struct->zoom = zoom;
-                p_sprite_struct->tile_x = tile_x;
-                p_sprite_struct->tile_y = tile_y;
-
-                // unlock the tile
-                if (xSemaphoreGive(p_sprite_struct->mutex) != pdTRUE)
+                // lock the tile
+                if (xSemaphoreTake(p_sprite_struct->mutex, (TickType_t)0))
                 {
-                    Serial.printf("updateTileTask(): Error in xSemaphoreGive() p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
+                    // We now have the semaphore and can access the shared resource.
+                    loadTile(p_sprite_struct->sprite, zoom, tile_x, tile_y);
+                    loadRoute(p_sprite_struct->sprite, zoom, tile_x, tile_y);
+                    loadPoint(p_sprite_struct->sprite, zoom, tile_x, tile_y);
+
+                    p_sprite_struct->zoom = zoom;
+                    p_sprite_struct->tile_x = tile_x;
+                    p_sprite_struct->tile_y = tile_y;
+
+                    // unlock the tile
+                    if (xSemaphoreGive(p_sprite_struct->mutex) != pdTRUE)
+                    {
+                        Serial.printf("updateTileTask(): Error in xSemaphoreGive() p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
+                    }
+                }
+                else
+                {
+                    Serial.printf("updateTileTask(): queue was passed because the tile was locked. p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
                 }
             }
-            else
-            {
-                Serial.printf("updateTileTask(): queue was passed because the tile was locked. p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
-            }
-        }
         }
 
         delay(50);
@@ -1320,35 +1322,45 @@ void loop()
 {
     if (gps.location.isValid())
     {
-        if (gps.location.isUpdated())
-        {
-            if (is_gps_active == false)
-                gps_count = 0;
+        bool isUpdated = gps.location.isUpdated();
 
-            if (use_sound && gps_count == gps_count_th)
-            {
-                playGPSActive();
-                Serial.println("loop(): playGPSActive() was invoked.");
-            }
+        if (isUpdated != isUpdatedPrev)
+        {
+            gps_count = 0;
+        }
+        isUpdatedPrev = isUpdated;
+
+        if (isUpdated)
+        {
             Serial.println("loop(): GPS is available.");
-            is_gps_active = true;
-            gps_count++;
+
+            if (!is_gps_active && gps_count == gps_count_th)
+            {
+                is_gps_active = true;
+
+                if (use_sound)
+                {
+                    playGPSActive();
+                    Serial.println("loop(): playGPSActive() was invoked.");
+                }
+            }
         }
         else
         {
-            if (is_gps_active == true)
-                gps_count = 0;
-
-            if (use_sound && gps_count == gps_count_th)
-            {
-                playGPSInactive();
-                Serial.println("loop(): playGPSInactive() was invoked.");
-            }
-
             Serial.println("loop()  GPS is unavailable.");
-            is_gps_active = false;
-            gps_count++;
+
+            if (is_gps_active && gps_count == gps_count_th)
+            {
+                is_gps_active = false;
+
+                if (use_sound)
+                {
+                    playGPSInactive();
+                    Serial.println("loop(): playGPSInactive() was invoked.");
+                }
+            }
         }
+        gps_count++;
 
         // Update curr_gps_idx_coords with gps data
         calcCoords2CoordsIdx(curr_gps_idx_coords, gps.location.lng(),
