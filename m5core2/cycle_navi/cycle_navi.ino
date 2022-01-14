@@ -937,7 +937,7 @@ void drawCanvas(sprite_struct *tile_cache[], st_idx_coords &display_center_idx_c
 // ================================================================================
 void initUpdateTileQueue()
 {
-    update_tile_queue = xQueueCreate(n_sprite, sizeof(st_updateTileQueueData));
+    update_tile_queue = xQueueCreate(LEN_QUEUE, sizeof(st_updateTileQueueData));
 
     if (update_tile_queue == NULL)
     {
@@ -971,6 +971,12 @@ void updateTileTask(void *arg)
             tile_x = queueData.tile_x;
             tile_y = queueData.tile_y;
 
+            if (zoom == p_sprite_struct->zoom && tile_x == p_sprite_struct->tile_x && tile_y == p_sprite_struct->tile_y)
+            {
+                Serial.printf("updateTileTask(): queue was skipped because the target tile was already up-to-date. p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
+            }
+            else
+            {
             // lock the tile
             if (xSemaphoreTake(p_sprite_struct->mutex, (TickType_t)0))
             {
@@ -993,6 +999,7 @@ void updateTileTask(void *arg)
             {
                 Serial.printf("updateTileTask(): queue was passed because the tile was locked. p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
             }
+        }
         }
 
         delay(50);
