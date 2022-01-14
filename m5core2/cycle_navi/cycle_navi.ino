@@ -916,7 +916,7 @@ void pushInfoTopLeft()
     canvas.setTextColor(WHITE, BLACK);
     canvas.printf("%5.1f", speed);
 
-    canvas.setCursor(pad + 12 * 5 + pad, pad + 12-6);
+    canvas.setCursor(pad + 12 * 5 + pad, pad + 12 - 6);
     canvas.setTextSize(1);
     canvas.print("km/h");
 }
