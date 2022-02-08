@@ -348,6 +348,14 @@ int read4BitsAsInt(File f)
     return ret;
 }
 
+bool is_within_tile(int x, int y, int tile_size_x, int tile_size_y)
+{
+    if (0 <= x && x < tile_size_x && 0 <= y && y < tile_size_y)
+        return true;
+    else
+        return false;
+}
+
 void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
     int prev_point_x, prev_point_y, point_x, point_y;
@@ -372,8 +380,12 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
                 point_x = read4BitsAsInt(route_dat);
                 point_y = read4BitsAsInt(route_dat);
 
-                drawLineWithStroke(sprite, prev_point_x, prev_point_y, point_x, point_y,
-                                   ROUTE_WIDTH, ROUTE_COLOR);
+                if (is_within_tile(point_x, point_y, tile_size, tile_size) || is_within_tile(prev_point_x, prev_point_y, tile_size, tile_size))
+                {
+                    drawLineWithStroke(sprite, prev_point_x,
+                                       prev_point_y, point_x, point_y,
+                                       ROUTE_WIDTH, ROUTE_COLOR);
+                }
 
                 prev_point_x = point_x;
                 prev_point_y = point_y;
