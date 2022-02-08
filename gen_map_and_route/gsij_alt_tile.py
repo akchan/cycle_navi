@@ -306,6 +306,25 @@ class GsijAltTile(Singleton):
 
         return alt_mat
 
+    @classmethod
+    def dist_2points(cls, lon1, lat1, lon2, lat2, r=6371*1000):
+        """
+        Return
+        ======
+
+        dist: distance between two points in meters using Grat-Circular distance method
+        """
+        lon1 = np.deg2rad(lon1)
+        lat1 = np.deg2rad(lat1)
+        lon2 = np.deg2rad(lon2)
+        lat2 = np.deg2rad(lat2)
+
+        delta_theta = np.arccos(np.sin(lat1) * np.sin(lat2) + np.cos(lat1) * np.cos(lat2) * np.cos(lon1 - lon2))
+
+        dist = r * delta_theta
+
+        return dist
+
 
 def main():
     pass
