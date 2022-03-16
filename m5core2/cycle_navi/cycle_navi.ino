@@ -339,7 +339,7 @@ void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
     sprite->fillCircle(x_2, y_2, r, color);
 }
 
-int read4BitsAsInt(File f)
+int read4BytesAsInt(File f)
 {
     int ret;
 
@@ -371,15 +371,17 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 
             if (route_dat.available())
             {
-                prev_point_x = read4BitsAsInt(route_dat);
-                prev_point_y = read4BitsAsInt(route_dat);
+                prev_point_x = read4BytesAsInt(route_dat);
+                prev_point_y = read4BytesAsInt(route_dat);
             }
 
             while (route_dat.available())
             {
-                point_x = read4BitsAsInt(route_dat);
-                point_y = read4BitsAsInt(route_dat);
+                point_x = read4BytesAsInt(route_dat);
+                point_y = read4BytesAsInt(route_dat);
 
+                // Conditions to avoid an inapproriate line occuring when comes
+                // back to the same tile
                 if (is_within_tile(point_x, point_y, tile_size, tile_size) || is_within_tile(prev_point_x, prev_point_y, tile_size, tile_size))
                 {
                     drawLineWithStroke(sprite, prev_point_x,
@@ -418,8 +420,8 @@ void loadPoint(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 
             while (point_dat.available())
             {
-                point_x = read4BitsAsInt(point_dat);
-                point_y = read4BitsAsInt(point_dat);
+                point_x = read4BytesAsInt(point_dat);
+                point_y = read4BytesAsInt(point_dat);
 
                 sprite->fillCircle(point_x, point_y, POINT_R, POINT_COLOR);
             }
