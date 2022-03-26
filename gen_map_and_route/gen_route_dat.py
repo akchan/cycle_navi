@@ -151,50 +151,154 @@ def parse_point_coords_from_kml(xml_tree):
     return coords
 
 
-def conv_route_coords_to_tile_idx_list(zoom, coords, tile_size=256, verbose=False):
+def is_neighbor_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y):
+    if (l_tile_x == r_tile_x and (np.abs(l_tile_y - r_tile_y) == 1)) \
+       or (l_tile_y == r_tile_y and (np.abs(l_tile_x - r_tile_x) == 1)):
+        return True
+
+    return False
+
+
+def is_same_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y):
+    if l_tile_x == r_tile_x and l_tile_y == r_tile_y:
+        return True
+
+    return False
+
+
+def force_neighbor_tile(tile_idx_list):
+    '''
+    tile_idx_list: list of [tile_x, tile_y, idx_x, idx_y]
+    '''
+    ret = []
+    ret.append(tile_idx_list[0])
+
+    for i in range(len(tile_idx_list) - 1):
+        l_tile_x, l_tile_y, l_idx_x, l_idx_y = tile_idx_list[i]
+        r_tile_x, r_tile_y, r_idx_x, r_idx_y = tile_idx_list[i+1]
+
+        tile_idx_tmp = force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                                    r_tile_x, r_tile_y, r_idx_x, r_idx_y)
+        
+        ret.extend(tile_idx_tmp[1:])
+    
+    return ret
+
+
+def force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                 r_tile_x, r_tile_y, r_idx_x, r_idx_y):
+    ret = []
+
+    # Calculate middle point
+    l_coords_idx_x = l_tile_x * TILE_SIZE + l_idx_x
+    l_coords_idx_y = l_tile_y * TILE_SIZE + l_idx_y
+    r_coords_idx_x = r_tile_x * TILE_SIZE + r_idx_x
+    r_coords_idx_y = r_tile_y * TILE_SIZE + r_idx_y
+
+    m_coords_idx_x = (l_coords_idx_x + r_coords_idx_x) // 2
+    m_coords_idx_y = (l_coords_idx_y + r_coords_idx_y) // 2
+    m_tile_x = m_coords_idx_x // TILE_SIZE
+    m_tile_y = m_coords_idx_y // TILE_SIZE
+    m_idx_x = m_coords_idx_x % TILE_SIZE
+    m_idx_y = m_coords_idx_y % TILE_SIZE
+
+    # Judge whether the middle point is neighbor of the left anf right point
+    cond_neighbor_left = is_neighbor_tile(l_tile_x, l_tile_y, m_tile_x, m_tile_y)
+    cond_neighbor_right = is_neighbor_tile(r_tile_x, r_tile_y, m_tile_x, m_tile_y)
+    cond_same_left = is_same_tile(l_tile_x, l_tile_y, m_tile_x, m_tile_y)
+    cond_same_right = is_same_tile(r_tile_x, r_tile_y, m_tile_x, m_tile_y)
+
+    if is_neighbor_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y) \
+       or (cond_same_left and cond_same_right):
+        ret.append([l_tile_x, l_tile_y, l_idx_x, l_idx_y])
+        ret.append([r_tile_x, r_tile_y, r_idx_x, r_idx_y])
+    elif cond_same_left:
+        ret.append([l_tile_x, l_tile_y, l_idx_x, l_idx_y])
+        list_tmp = force_neighbor_tile_bsearch(m_tile_x, m_tile_y, m_idx_x, m_idx_y,
+                                                r_tile_x, r_tile_y, r_idx_x, r_idx_y)
+        ret.extend(list_tmp[1:])
+    elif cond_same_right:
+        list_tmp = force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                                m_tile_x, m_tile_y, m_idx_x, m_idx_y)
+        ret.extend(list_tmp[:-1])
+        ret.append([r_tile_x, r_tile_y, r_idx_x, r_idx_y])
+    else:
+        if cond_neighbor_left and cond_neighbor_right:
+            ret.append([l_tile_x, l_tile_y, l_idx_x, l_idx_y])
+            ret.append([m_tile_x, m_tile_y, m_idx_x, m_idx_y])
+            ret.append([r_tile_x, r_tile_y, r_idx_x, r_idx_y])
+        elif cond_neighbor_left:
+            ret.append([l_tile_x, l_tile_y, l_idx_x, l_idx_y])
+            ret.extend(force_neighbor_tile_bsearch(m_tile_x, m_tile_y, m_idx_x, m_idx_y,
+                                                    r_tile_x, r_tile_y, r_idx_x, r_idx_y))
+        elif cond_neighbor_right:
+            ret.extend(force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                                    m_tile_x, m_tile_y, m_idx_x, m_idx_y))
+            ret.append([r_tile_x, r_tile_y, r_idx_x, r_idx_y])
+        else:
+            ret.extend(force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                                    m_tile_x, m_tile_y, m_idx_x, m_idx_y))
+            ret.extend(force_neighbor_tile_bsearch(m_tile_x, m_tile_y, m_idx_x, m_idx_y,
+                                                    r_tile_x, r_tile_y, r_idx_x, r_idx_y)[1:])
+
+    return ret
+
+
+def conv_route_coords_to_tile_idx_list(zoom, coords,
+                                       tile_size=256,
+                                       force_neighbor=True,
+                                       verbose=False):
     tile_idx_list = []
     raw_tile_idx = []
 
+    # Convert (lon, lat) to (tile_x, tile_y, idx_x, idx_y)
     for lon, lat in coords:
         _, tile_x, tile_y = GsijAltTile.calc_coords2tile_coords(zoom, lon, lat)
         idx_x, idx_y = GsijAltTile.calc_tile_idx(zoom, lon, lat, tile_size)
 
-        raw_tile_idx.append([tile_x, tile_y, idx_x, idx_y])
+        tile_idx_tmp = [tile_x, tile_y, idx_x, idx_y]
 
+        # Avoid duplication
+        if len(raw_tile_idx) == 0 or raw_tile_idx[-1] != tile_idx_tmp:
+            raw_tile_idx.append(tile_idx_tmp)
+
+    if force_neighbor:
+        raw_tile_idx = force_neighbor_tile(raw_tile_idx)
+
+    # Add some points to handle the tile edge problem
     if verbose:
         print(raw_tile_idx[0])
 
     tile_idx_list.append([zoom, *raw_tile_idx[0]])
 
     for prev, curr in zip(raw_tile_idx[:-1], raw_tile_idx[1:]):
-        if prev == curr:
-            continue
-
         tile_x_prev, tile_y_prev, idx_x_prev, idx_y_prev = prev
         tile_x_curr, tile_y_curr, idx_x_curr, idx_y_curr = curr
 
         if [tile_x_prev, tile_y_prev] != [tile_x_curr, tile_y_curr]:
-            idx_tmp = [
+            # Add the last point on the previous tile
+            tile_idx_tmp = [
                 zoom, tile_x_prev, tile_y_prev,
                 idx_x_curr + tile_size * (tile_x_curr - tile_x_prev),
                 idx_y_curr + tile_size * (tile_y_curr - tile_y_prev)
             ]
 
             if verbose:
-                print(idx_tmp)
+                print(tile_idx_tmp)
 
-            tile_idx_list.append(idx_tmp)
+            tile_idx_list.append(tile_idx_tmp)
 
-            idx_tmp = [
+            # Add the first point on the next tile
+            tile_idx_tmp = [
                 zoom, tile_x_curr, tile_y_curr,
                 idx_x_prev + tile_size * (tile_x_prev - tile_x_curr),
                 idx_y_prev + tile_size * (tile_y_prev - tile_y_curr)
             ]
 
             if verbose:
-                print(idx_tmp)
+                print(tile_idx_tmp)
 
-            tile_idx_list.append(idx_tmp)
+            tile_idx_list.append(tile_idx_tmp)
 
         if verbose:
             print([zoom, *curr])
@@ -432,3 +536,4 @@ if __name__ == '__main__':
     route_file_path = sys.argv[1]
 
     main(route_file_path)
+    
