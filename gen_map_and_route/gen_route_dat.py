@@ -101,16 +101,23 @@ def parse_route_coords_from_kml(xml_tree):
     def key_func(elm):
         return len(elm.text.split('\n'))
 
-    # Take only the longest route
-    elm_coords = sorted(root.findall(xpath_str), key=key_func)[-1]
+    # Take all routes
+    elm_coords = sorted(root.findall(xpath_str), key=key_func)
 
     # Convert from string to float
-    for line in elm_coords.text.split('\n'):
-        line = line.split(',')
-        if len(line) < 2:
+    for elm_coords_tmp in elm_coords:
+        lines = elm_coords_tmp.text.split('\n')
+
+        # Pass when it seems to be a point
+        if len(lines) < 2:
             continue
-        lon, lat = line[:2]
-        coords.append([float(lon), float(lat)])
+
+        for line in lines:
+            line = line.split(',')
+            if len(line) < 2:
+                continue
+            lon, lat = line[:2]
+            coords.append([float(lon), float(lat)])
 
     return coords
 
@@ -166,10 +173,22 @@ def is_same_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y):
     return False
 
 
-def force_neighbor_tile(tile_idx_list):
+def force_neighbor_tile(tile_idx_list,
+                        method='linear'):
     '''
     tile_idx_list: list of [tile_x, tile_y, idx_x, idx_y]
+    method: 'linear' or 'bsearch'
+
+    ToDL
+    ====
+
+    - Need refactoring for non recursive algorithm
     '''
+    # Check arguments
+    valid_methods = ['linear', 'bsearch']
+    assert method in valid_methods, 'Invalid method {} was given. Use one of these. {}'.format(method, valid_methods)
+    
+    # Prepare variables
     ret = []
     ret.append(tile_idx_list[0])
 
@@ -177,11 +196,88 @@ def force_neighbor_tile(tile_idx_list):
         l_tile_x, l_tile_y, l_idx_x, l_idx_y = tile_idx_list[i]
         r_tile_x, r_tile_y, r_idx_x, r_idx_y = tile_idx_list[i+1]
 
-        tile_idx_tmp = force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
-                                                    r_tile_x, r_tile_y, r_idx_x, r_idx_y)
+        if 'linear' == method:
+            tile_idx_tmp = force_neighbor_tile_linear(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                                      r_tile_x, r_tile_y, r_idx_x, r_idx_y)
+        elif 'bsearch' == method:
+            tile_idx_tmp = force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                                                       r_tile_x, r_tile_y, r_idx_x, r_idx_y)
         
         ret.extend(tile_idx_tmp[1:])
     
+    return ret
+
+
+def force_neighbor_tile_linear(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
+                               r_tile_x, r_tile_y, r_idx_x, r_idx_y):
+    '''
+    Make given two points being neighbor adding intermediate points.
+    The points are determined by linear search method.
+
+    Return
+    ======
+
+    - [
+        [l_tile_x, l_tile_y, l_idx_x, l_idx_y],
+        # some or no points
+        [r_tile_x, r_tile_y, r_idx_x, r_idx_y]
+        ]
+    '''
+    ret = []
+    swap_flag = False  # default is False
+
+    point_left = [l_tile_x, l_tile_y, l_idx_x, l_idx_y]
+    point_right = [r_tile_x, r_tile_y, r_idx_x, r_idx_y]
+
+    if is_same_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y) \
+       or is_neighbor_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y):
+        # Nothing to do for given two points
+        # This case includes that given two points are same.
+        ret.append(point_left)
+        ret.append(point_right)
+        return ret
+
+    # Convert coordinates from tile and index to index only
+    l_coords_idx_x = l_tile_x * TILE_SIZE + l_idx_x
+    l_coords_idx_y = l_tile_y * TILE_SIZE + l_idx_y
+    r_coords_idx_x = r_tile_x * TILE_SIZE + r_idx_x
+    r_coords_idx_y = r_tile_y * TILE_SIZE + r_idx_y
+
+    diff_x = r_coords_idx_x - l_coords_idx_x
+    diff_y = r_coords_idx_y - l_coords_idx_y
+
+    if np.abs(diff_x) < np.abs(diff_y):
+        swap_flag = True
+        l_coords_idx_x, l_coords_idx_y = l_coords_idx_y, l_coords_idx_x
+        r_coords_idx_x, r_coords_idx_y = r_coords_idx_y, r_coords_idx_x
+        diff_x, diff_y = diff_y, diff_x
+    
+    def line_formula(x):
+        return (diff_y / diff_x) * (x - l_coords_idx_x) + l_coords_idx_y
+    
+    ret.append(point_left)
+    for i_x in np.linspace(0, diff_x, np.abs(diff_x) + 1)[1:]:
+        x_tmp = l_coords_idx_x + i_x
+        y_tmp = int(np.round(line_formula(x_tmp)))
+
+        if swap_flag:
+            x_tmp, y_tmp = y_tmp, x_tmp
+        
+        tile_x_tmp = x_tmp // TILE_SIZE
+        tile_y_tmp = y_tmp // TILE_SIZE
+        idx_x_tmp = x_tmp % TILE_SIZE
+        idx_y_tmp = y_tmp % TILE_SIZE
+
+        tile_x_last, tile_y_last, idx_x_last, idx_y_last = ret[-1]
+        
+        if is_neighbor_tile(tile_x_last, tile_y_last, tile_x_tmp, tile_y_tmp):
+            ret.append([tile_x_tmp, tile_y_tmp, idx_x_tmp, idx_y_tmp])
+
+            if is_neighbor_tile(tile_x_tmp, tile_y_tmp, r_tile_x, r_tile_y):
+                break
+
+    ret.append(point_right)
+
     return ret
 
 
@@ -246,8 +342,10 @@ def force_neighbor_tile_bsearch(l_tile_x, l_tile_y, l_idx_x, l_idx_y,
 
 def conv_route_coords_to_tile_idx_list(zoom, coords,
                                        tile_size=256,
-                                       force_neighbor=True,
+                                       force_neighbor=False,
+                                       force_neighbor_method='linear',
                                        verbose=False):
+    
     tile_idx_list = []
     raw_tile_idx = []
 
@@ -263,7 +361,8 @@ def conv_route_coords_to_tile_idx_list(zoom, coords,
             raw_tile_idx.append(tile_idx_tmp)
 
     if force_neighbor:
-        raw_tile_idx = force_neighbor_tile(raw_tile_idx)
+        raw_tile_idx = force_neighbor_tile(raw_tile_idx,
+                                           method=force_neighbor_method)
 
     # Add some points to handle the tile edge problem
     if verbose:
@@ -375,7 +474,7 @@ def list_map_tile_to_collect(target_zoom_level,
                              route_tile_idx_list,
                              point_tile_idx_list,
                              r_th_neighbor_map_collection=1.5,
-                             collection_area_zoom=8,  # same value to the value in japan_tile_list_path json fjile
+                             collection_area_zoom=8,  # same value to the value in japan_tile_list_path json file
                              japan_tile_list_path="japan_tile_list.json",):
     map_tile_having_something = set()
 
@@ -502,9 +601,25 @@ def main(route_file_path,
     tree = ET.parse(route_file_path)
     route_coords = parse_route_coords_from_xml(tree)
 
-    for zoom in target_zoom_level:
+    for zoom in sorted(target_zoom_level):
         route_tile_idx_list = conv_route_coords_to_tile_idx_list(zoom, route_coords, TILE_SIZE)
         write_route_tile_idx_to_route_dat(route_dat_dir_path, route_tile_idx_list)
+    
+        # Genrate initPoint file
+        if zoom == max(target_zoom_level):
+            coords_idx_x_init = route_tile_idx_list[0][1] * TILE_SIZE + route_tile_idx_list[0][3]
+            coords_idx_y_init = route_tile_idx_list[0][2] * TILE_SIZE + route_tile_idx_list[0][4]
+
+            print(zoom)
+            print(coords_idx_x_init, coords_idx_y_init)
+
+            init_point_file_path = os.path.join(output_dir_path, 'initPoint')
+            with open(init_point_file_path, 'wb') as fp:
+                # i: signed integer (4 bytes = 32 bits)
+                # <: little endian
+                buf = struct.Struct('<iii').pack(max(target_zoom_level),
+                                                 coords_idx_x_init, coords_idx_y_init)
+                fp.write(buf)
 
     # Generate point_dat
     if verbose:
@@ -530,6 +645,10 @@ def main(route_file_path,
 
     print('Copy directories inside the directory below to the root direcotry of SD card.')
     print('  {}'.format(output_dir_path))
+
+    # Generate use_sound file
+    use_sound_file_path = os.path.join(output_dir_path, 'use_sound')
+    open(use_sound_file_path, 'w').close()
 
 
 if __name__ == '__main__':
