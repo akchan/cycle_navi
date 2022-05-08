@@ -15,10 +15,15 @@
  * sizeof(int) -> 4 on M5stack
  */
 
-#include <math.h>
+
 #include <M5Core2.h>
-#include <LovyanGFX.hpp> // Installed through arduino IDE library manager
+#include <math.h>
+#include "SdFat.h"  // Define SdFat.h before LovyanGFX.hpp
 #include <TinyGPSPlus.h> // Installed through arduino IDE library manager
+
+#define LGFX_USE_V1  // Use v1.0.0
+#include <LovyanGFX.hpp> // Installed through arduino IDE library manager
+#include <LGFX_AUTODETECT.hpp>
 
 #include <driver/i2s.h>
 #include "sound_boot.h"
@@ -26,6 +31,69 @@
 #include "sound_gps_inactive.h"
 #include "satellite_icon.h"
 
+
+// ================================================================================
+// SdFat settings
+// ================================================================================
+// SD_FAT_TYPE = 0 for SdFat/File as defined in SdFatConfig.h,
+// 1 for FAT16/FAT32, 2 for exFAT, 3 for FAT16/FAT32 and exFAT.
+#ifdef SF_FAT_TYPE
+#undef SF_FAT_TYPE
+#endif
+#define SD_FAT_TYPE 3
+
+// SDCARD_SS_PIN is defined for the built-in SD on some boards.
+#ifndef SDCARD_SS_PIN
+const uint8_t SD_CS_PIN = SS;
+#else  // SDCARD_SS_PIN
+// Assume built-in SD is used.
+const uint8_t SD_CS_PIN = SDCARD_SS_PIN;
+#endif  // SDCARD_SS_PIN
+
+// Try max SPI clock for an SD. Reduce SPI_CLOCK if errors occur.
+#define SPI_CLOCK SD_SCK_MHZ(25)
+
+// Defined in SdFat\src\SdFatConfig.h
+// 1 is default, 0 is needed for M5stack.
+#ifdef ENABLE_DEDICATED_SPI
+#undef ENABLE_DEDICATED_SPI
+#endif
+#define ENABLE_DEDICATED_SPI 0
+
+// Try to select the best SD card configuration.
+#if HAS_SDIO_CLASS
+#define SD_CONFIG SdioConfig(FIFO_SDIO)
+#elif  ENABLE_DEDICATED_SPI
+#define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SPI_CLOCK)
+#else  // HAS_SDIO_CLASS
+//#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SPI_CLOCK)
+// TFCARD_CS_PIN is defined in M5Stack Config.h (Pin 4)
+#define SD_CONFIG SdSpiConfig(TFCARD_CS_PIN, SHARED_SPI, SPI_CLOCK)
+#endif  // HAS_SDIO_CLASS
+
+#if SD_FAT_TYPE == 0
+SdFat sd;
+File file;
+#define SDFAT_FSFILE_TYPE File
+#elif SD_FAT_TYPE == 1
+SdFat32 sd;
+File32 file;
+#define SDFAT_FSFILE_TYPE File32
+#elif SD_FAT_TYPE == 2
+SdExFat sd;
+ExFile file;
+#define SDFAT_FSFILE_TYPE ExFile
+#elif SD_FAT_TYPE == 3
+SdFs sd;
+FsFile file;
+#define SDFAT_FSFILE_TYPE FsFile
+#else  // SD_FAT_TYPE
+#error Invalid SD_FAT_TYPE
+#endif  // SD_FAT_TYPE
+
+// ================================================================================
+// Variables declaration
+// ================================================================================
 // Settings
 const unsigned long interval_sec = 1;
 const float is_moved_cutoff_m = 0.7;
@@ -147,6 +215,7 @@ QueueHandle_t update_tile_queue;
 #define MODE_SPK 1
 
 bool use_sound;
+
 
 // ================================================================================
 // GPS
@@ -286,12 +355,13 @@ void genPointPath(char *file_path, int z, int tile_x, int tile_y)
 void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
     genMapPath(file_path, zoom, tile_x, tile_y);
-    File fp = SD.open(file_path, FILE_READ);
-    if (fp)
+    // File fp = sd.open(file_path, FILE_READ);
+    if (file.open(file_path, O_RDONLY))
     {
         uint32_t t = millis();
 
-        sprite->drawJpgFile(SD, file_path);
+        // sprite->drawJpgFile(SD, file_path);
+        sprite->drawJpgFile(sd, &file);
 
         t = millis() - t;
         Serial.printf("MapTile was updated. (%d ms) %s\n", t, file_path);
@@ -302,7 +372,7 @@ void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
         Serial.print("Map was not found.\n");
         Serial.println(file_path);
     }
-    fp.close();
+    file.close();
 }
 
 void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
@@ -339,11 +409,11 @@ void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
     sprite->fillCircle(x_2, y_2, r, color);
 }
 
-int read4BytesAsInt(File f)
+int read4BytesAsInt(SDFAT_FSFILE_TYPE &file)
 {
     int ret;
 
-    f.read((uint8_t *)&ret, sizeof(int));
+    file.read((uint8_t *)&ret, sizeof(int));
 
     return ret;
 }
@@ -361,11 +431,13 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
     int prev_point_x, prev_point_y, point_x, point_y;
 
     genRoutePath(file_path, zoom, tile_x, tile_y);
-    File route_dat = SD.open(file_path, FILE_READ);
-    if (route_dat)
+    
+    SDFAT_FSFILE_TYPE route_dat;
+    
+    if (route_dat.open(file_path, O_RDONLY))
     {
-        if (route_dat.size() % (sizeof(int) * 2) == 0 &&
-            route_dat.size() / sizeof(int) / 2 > 1)
+        if (route_dat.fileSize() % (sizeof(int) * 2) == 0 &&
+            route_dat.fileSize() / sizeof(int) / 2 > 1)
         {
             Serial.printf("Route dat was detected.  %s\n", file_path);
 
@@ -410,11 +482,11 @@ void loadPoint(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
     int point_x, point_y;
 
     genPointPath(file_path, zoom, tile_x, tile_y);
-    File point_dat = SD.open(file_path, FILE_READ);
-    if (point_dat)
+    SDFAT_FSFILE_TYPE point_dat;
+    if (point_dat.open(file_path, O_RDONLY))
     {
-        if (point_dat.size() % (sizeof(int) * 2) == 0 &&
-            point_dat.size() / sizeof(int) / 2 > 1)
+        if (point_dat.fileSize() % (sizeof(int) * 2) == 0 &&
+            point_dat.fileSize() / sizeof(int) / 2 > 1)
         {
             Serial.printf("Point dat was detected.  %s\n", file_path);
 
@@ -1038,25 +1110,27 @@ void initZoomList(const char *map_dir_path)
     int num;
 
     // List zoom level directories
-    File map_dir = SD.open(map_dir_path, FILE_READ);
-    if (map_dir)
+    SDFAT_FSFILE_TYPE map_dir;
+    SDFAT_FSFILE_TYPE entry;
+    char filename[20];
+    if (map_dir.open(map_dir_path, O_RDONLY))
     {
-        while (true)
+        while (i < LEN_ZOOM_LIST)
         {
-            File entry = map_dir.openNextFile();
-            if (!entry)
+            if (!entry.openNext(&map_dir, O_RDONLY))
             {
                 entry.close();
                 break;
             }
-
-            num = String(entry.name()).toInt();
-            if (String(entry.name()) == String(num))
+            entry.getName(filename, 20);
+            num = String(filename).toInt();
+            if (String(filename) == String(num))
             {
                 zoom_list[i] = num;
                 n_zoom = i + 1;
                 i++;
             }
+            Serial.printf("%s\n", filename);
 
             entry.close();
         }
@@ -1117,11 +1191,13 @@ bool checkIfUseSound()
 {
     bool ret = false;
 
-    File fp = SD.open("/useSound", FILE_READ);
-
-    if (fp)
+    if (file.open("/useSound", O_RDONLY)) {
         ret = true;
-    fp.close();
+        Serial.println("checkIfUseSound(): useSound=true");
+    } else {
+        Serial.println("checkIfUseSound(): useSound=false");
+    }
+    file.close();
 
     return ret;
 }
@@ -1135,7 +1211,7 @@ void InitI2SSpeakOrMic(int mode)
                                .sample_rate = SAMPLE_RATE,
                                .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
                                .channel_format = I2S_CHANNEL_FMT_ALL_RIGHT,
-                               .communication_format = I2S_COMM_FORMAT_I2S,
+                               .communication_format = I2S_COMM_FORMAT_STAND_I2S,
                                .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
                                .dma_buf_count = 6,
                                .dma_buf_len = 60,
@@ -1275,15 +1351,39 @@ void setupButtonHandlers()
     M5.BtnC.addHandler(centeringHandler, E_RELEASE);
 }
 
+void initMapVariables(){
+    if (file.open("/initPoint", O_RDONLY)) {
+        Serial.println("initMapVariables(): initPoint file was detected.");
+
+        zoom = read4BytesAsInt(file);
+        curr_gps_idx_coords.idx_x = read4BytesAsInt(file);
+        curr_gps_idx_coords.idx_y = read4BytesAsInt(file);
+    }
+    else {
+        Serial.println("initMapVariables(): initPoint file was not detected.");
+        Serial.println("initMapVariables(): Default point was loaded.");
+
+        zoom = z_init;
+        curr_gps_idx_coords.idx_x = idx_coords_x_init;
+        curr_gps_idx_coords.idx_y = idx_coords_y_init;
+    }
+    file.close();
+
+    Serial.printf("initMapVariables(): zoom:%d, curr_gps_idx_coords idx_x:%d, idx_y:%d\n", zoom, curr_gps_idx_coords.idx_x, curr_gps_idx_coords.idx_y);
+
+    display_center_idx_coords = curr_gps_idx_coords;
+}
+
 // ========================================
 // M5Stack loop
 // ========================================
 void setup(void)
 {
     // Initialization
+    // M5.begin(bool LCDEnable = true, bool SDEnable = true, bool SerialEnable = true, bool I2CEnable = false, mbus_mode_t mode = kMBusModeOutput);
     // kMBusModeOutput: powered by USB or Battery
     // KMBusModeInput: powered by 5-12V external
-    M5.begin(true, true, true, false, kMBusModeOutput);
+    M5.begin(true, false, true, false, kMBusModeOutput);
     lcd.init();
     lcd.setRotation(1);
     lcd.setBrightness(brightness_list[i_brightness]);
@@ -1296,6 +1396,11 @@ void setup(void)
 
     // Serial connection to GPS module
     Serial2.begin(9600, SERIAL_8N1, 13, 14);
+
+    // Initialize the SD card.
+    if (!sd.begin(SD_CONFIG)) {
+        sd.initErrorHalt(&Serial);
+    }
 
     // Initialize zoom_list
     initZoomList(map_dir_path);
@@ -1321,10 +1426,8 @@ void setup(void)
     xTaskCreatePinnedToCore(updateTileTask, "updateTileTask", 8192, &update_tile_queue, 1, NULL, 0);
 
     // Set initial map variables (The tokyo station)
-    zoom = z_init;
-    curr_gps_idx_coords.idx_x = idx_coords_x_init;
-    curr_gps_idx_coords.idx_y = idx_coords_y_init;
-    display_center_idx_coords = curr_gps_idx_coords;
+    initMapVariables();
+
     updateTileCache(tile_cache, zoom, display_center_idx_coords, n_sprite_x,
                     n_sprite_y, false);
 
