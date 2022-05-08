@@ -13,6 +13,9 @@ Simple navigation system using M5Stack Core2
 - M5Stack Core2
 - M5Stack GPS module v2
 - M5Go for core2 bottom mobule
+- SD card (TF card)
+    - formatted as exFAT with small allocation unit size (ex. 2048 byte/block)
+    - If you use mac, use `newfs_exfat -b 2048 {device}` command instead of `Disk utility.app` which can't specify the allocation unit size.
 
 ### Recommended
 
