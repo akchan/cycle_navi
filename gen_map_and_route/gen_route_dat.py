@@ -544,9 +544,10 @@ def get_map_tile(zoom, tile_x, tile_y,
             with tempfile.SpooledTemporaryFile(TILE_SIZE**2*3*1.5) as fp:
                 fp.write(res.content)
                 fp.seek(0)
-                os.makedirs(cache_path, exist_ok=True)
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
                 Image.open(fp, formats=("PNG",)).convert("RGB").save(cache_path)
         elif res.status_code == 404:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             Path(cache_path).touch()
         else:
             raise AssertionError('unexpected status code from server: {}'.format(res.status_code))
@@ -647,7 +648,7 @@ def main(route_file_path,
     print('  {}'.format(output_dir_path))
 
     # Generate use_sound file
-    use_sound_file_path = os.path.join(output_dir_path, 'use_sound')
+    use_sound_file_path = os.path.join(output_dir_path, 'useSound')
     open(use_sound_file_path, 'w').close()
 
 
