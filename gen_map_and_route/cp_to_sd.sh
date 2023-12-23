@@ -33,7 +33,7 @@ else
 fi
 
 # Copy route and point files
-rm -f "${sd_path}/route_dat" "${sd_path}/point_dat"
+rm -Rf "${sd_path}/route_dat" "${sd_path}/point_dat"
 cp -rv "${route_map_path}/route_dat" "${route_map_path}/point_dat" "${sd_path}"
 
 exit 0
