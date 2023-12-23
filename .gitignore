@@ -36,3 +36,6 @@ __pypackages__/
 /gen_map_and_route/gsij_map_tile_cache/
 .vscode/
 /gen_map_and_route/map_route*
+
+*.kml
+*.gpx
