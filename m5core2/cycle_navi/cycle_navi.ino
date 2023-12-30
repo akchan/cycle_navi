@@ -19,7 +19,6 @@
  * 描画プロセスの再検討。指離してから読み込みするようにする。
  */
 
-#include "SdFatConfig.h"
 #include <SdFat.h> // Define SdFat.h before LovyanGFX.hpp
 #include <M5Core2.h>
 #include <math.h>
@@ -66,29 +65,19 @@ struct st_tile_coords
     int tile_x;
     int tile_y;
 };
-struct st_idx_on_tile
-{
-    int idx_x;
-    int idx_y;
-};
 struct st_idx_coords
 {
     int idx_x;
     int idx_y;
 };
 // Initial point (Tokyo station)
-int z_init = 14, idx_coords_x_init = 14552 * 256 + 218, idx_coords_y_init = 6451 * 256 + 165;
+int z_init = 14;
+int idx_coords_x_init = 14552 * 256 + 218;
+int idx_coords_y_init = 6451 * 256 + 165;
 st_idx_coords curr_gps_idx_coords = {0, 0};
 
 // Variables [map & route]
-// Color name:
-//   TFT_BLACK, TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_PURPLE,
-//   TFT_OLIVE, TFT_LIGHTGREY, TFT_DARKGREY, TFT_BLUE, TFT_GREENYELLOW,
-//   TFT_GREEN, TFT_YELLOW, TFT_ORANGE, TFT_PINK, TFT_CYAN, TFT_DARKCYAN,
-//   TFT_RED, TFT_MAGENTA, TFT_WHITE
-#define NO_TILE_COLOR TFT_LIGHTGREY
 #define LEN_FILE_PATH 35
-char file_path[LEN_FILE_PATH];
 const int tile_size = 256;
 const int n_sprite_x = 3;
 const int n_sprite_y = 3;
@@ -118,6 +107,13 @@ int zoom_list[LEN_ZOOM_LIST];
 int n_zoom = -1;
 int zoom_list_i = 0;
 
+// Color name:
+//   TFT_BLACK, TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_PURPLE,
+//   TFT_OLIVE, TFT_LIGHTGREY, TFT_DARKGREY, TFT_BLUE, TFT_GREENYELLOW,
+//   TFT_GREEN, TFT_YELLOW, TFT_ORANGE, TFT_PINK, TFT_CYAN, TFT_DARKCYAN,
+//   TFT_RED, TFT_MAGENTA, TFT_WHITE
+#define NO_CACHE_COLOR TFT_WHITE
+#define NO_IMG_COLOR TFT_LIGHTGREY
 #define ROUTE_COLOR TFT_BLUE
 #define POINT_COLOR TFT_DARKGREEN
 #define ROUTE_WIDTH 7
@@ -167,7 +163,7 @@ bool use_sound;
 // ================================================================================
 // SD_FAT_TYPE = 0 for SdFat/File as defined in SdFatConfig.h,
 // 1 for FAT16/FAT32, 2 for exFAT, 3 for FAT16/FAT32 and exFAT.
-#define SD_FAT_TYPE 3  // Use SD_FAT_TYPE 3 for LovyanGFX
+#define SD_FAT_TYPE 3 // Use SD_FAT_TYPE 3 for LovyanGFX
 SdFs sd;
 FsFile file;
 #define SDFAT_FSFILE_TYPE FsFile
@@ -237,7 +233,7 @@ int calcCoords2TileCoords(st_tile_coords &tile_coords, int zoom, double lon,
     }
 }
 
-int calcIdxOnTile(st_idx_on_tile &idx_on_tile, int zoom, int lon, int lat,
+int calcIdxOnTile(st_idx_coords &idx_on_tile, int zoom, int lon, int lat,
                   int tile_size)
 {
     st_tile_coords tile_coords1, tile_coords2;
@@ -268,7 +264,7 @@ void calcCoordsIdx2Tile(st_tile_coords &tile_coords, st_idx_coords &idx_coords,
     tile_coords.tile_y = idx_coords.idx_y / tile_size;
 }
 
-void calcCoordsIdx2IdxOnTile(st_idx_on_tile &idx_on_tile,
+void calcCoordsIdx2IdxOnTile(st_idx_coords &idx_on_tile,
                              st_idx_coords &idx_coords, int tile_size)
 {
     idx_on_tile.idx_x = idx_coords.idx_x % tile_size;
@@ -317,23 +313,23 @@ void genPointPath(char *file_path, int z, int tile_x, int tile_y)
 
 void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
+    char file_path[LEN_FILE_PATH];
+    
     genMapPath(file_path, zoom, tile_x, tile_y);
-    // File fp = sd.open(file_path, FILE_READ);
+
     if (file.open(file_path, O_RDONLY))
     {
         uint32_t t = millis();
 
-        // sprite->drawJpgFile(SD, file_path);
         sprite->drawJpgFile(sd, &file);
 
         t = millis() - t;
-        Serial.printf("MapTile was updated. (%d ms) %s\n", t, file_path);
+        Serial.printf("loadTile(): MapTile was updated in %d ms. %s\n", t, file_path);
     }
     else
     {
-        sprite->fillSprite(NO_TILE_COLOR);
-        Serial.print("Map was not found.\n");
-        Serial.println(file_path);
+        sprite->fillSprite(NO_IMG_COLOR);
+        Serial.printf("loadTile(): Map was not found. %s\n", file_path);
     }
     file.close();
 }
@@ -392,6 +388,7 @@ bool is_within_tile(int x, int y, int tile_size_x, int tile_size_y)
 void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
     int prev_point_x, prev_point_y, point_x, point_y;
+    char file_path[LEN_FILE_PATH];
 
     genRoutePath(file_path, zoom, tile_x, tile_y);
 
@@ -443,6 +440,7 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 void loadPoint(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
     int point_x, point_y;
+    char file_path[LEN_FILE_PATH];
 
     genPointPath(file_path, zoom, tile_x, tile_y);
     SDFAT_FSFILE_TYPE point_dat;
@@ -494,7 +492,7 @@ void shiftTileCacheLeft(sprite_struct *tile_cache[], int n_sprite_x,
 
         if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
         {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
+            ptr_tmp->sprite->fillSprite(NO_CACHE_COLOR);
 
             // unlock the tile
             if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
@@ -530,7 +528,7 @@ void shiftTileCacheRight(sprite_struct *tile_cache[], int n_sprite_x,
 
         if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
         {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
+            ptr_tmp->sprite->fillSprite(NO_CACHE_COLOR);
 
             // unlock the tile
             if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
@@ -585,7 +583,7 @@ void shiftTileCacheUp(sprite_struct *tile_cache[], int n_sprite_x,
 
         if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
         {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
+            ptr_tmp->sprite->fillSprite(NO_CACHE_COLOR);
 
             // unlock the tile
             if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
@@ -621,7 +619,7 @@ void shiftTileCacheDown(sprite_struct *tile_cache[], int n_sprite_x,
 
         if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
         {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
+            ptr_tmp->sprite->fillSprite(NO_CACHE_COLOR);
 
             // unlock the tile
             if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
@@ -777,7 +775,7 @@ void initTileCache()
 
     canvas.setPsram(true);
     canvas.createSprite(lcd.width(), lcd.height());
-    canvas.fillSprite(NO_TILE_COLOR);
+    canvas.fillSprite(NO_CACHE_COLOR);
 
     for (int i = 0; i < n_sprite; i++)
     {
@@ -790,7 +788,7 @@ void initTileCache()
         tile_cache[i]->sprite = new LGFX_Sprite(&canvas);
         tile_cache[i]->sprite->setPsram(true);
         tile_cache[i]->sprite->createSprite(tile_size, tile_size);
-        tile_cache[i]->sprite->fillSprite(NO_TILE_COLOR);
+        tile_cache[i]->sprite->fillSprite(NO_CACHE_COLOR);
 
         tile_cache[i]->mutex = xSemaphoreCreateMutex();
 
@@ -974,7 +972,7 @@ void pushInfoTopLeft()
 
 void drawCanvas(sprite_struct *tile_cache[], st_idx_coords &display_center_idx_coords)
 {
-    canvas.fillSprite(NO_TILE_COLOR);
+    canvas.fillSprite(NO_CACHE_COLOR);
     pushTileCache(tile_cache, display_center_idx_coords);
     pushDirIcon(gps.course.deg(), curr_gps_idx_coords, display_center_idx_coords, is_gps_active);
     pushInfoTopRight();
@@ -1062,8 +1060,10 @@ void updateTileTask(void *arg)
 // ================================================================================
 int compIntR(const void *a, const void *b) { return *(int *)a < *(int *)b; }
 
-void initZoomList(const char *map_dir_path)
+void initZoomList()
 {
+    Serial.println("initZoomList():");
+
     for (int j = 0; j < LEN_ZOOM_LIST; j++)
     {
         zoom_list[j] = -1;
@@ -1093,17 +1093,17 @@ void initZoomList(const char *map_dir_path)
                 n_zoom = i + 1;
                 i++;
             }
-            Serial.printf("%s\n", filename);
+            Serial.printf("  %s\n", filename);
 
             entry.close();
         }
     }
     map_dir.close();
-    Serial.printf("n_zoom: %d\n", n_zoom);
+    Serial.printf("  n_zoom: %d\n", n_zoom);
 
     qsort(zoom_list, n_zoom, sizeof(int), compIntR);
 
-    Serial.print("Zoom levels of stored map: ");
+    Serial.print("  Zoom levels of stored map: ");
     for (int j = 0; j < LEN_ZOOM_LIST; j++)
     {
         Serial.printf("%d ", zoom_list[j]);
@@ -1375,10 +1375,12 @@ void setup(void)
     // Initializing sound
     use_sound = checkIfUseSound();
     if (use_sound)
+    {
         playBoot();
+    }
 
     // Initialize zoom_list
-    initZoomList(map_dir_path);
+    initZoomList();
 
     // Initialize sprites for image cache
     initTileCache();
@@ -1473,10 +1475,10 @@ void loop()
         M5.update();
 
         // Feed GPS parser
-        while (Serial2.available() > 0)
-        {
-            gps.encode(Serial2.read());
-        }
+        // while (Serial2.available() > 0)
+        // {
+        //     gps.encode(Serial2.read());
+        // }
         t_curr = millis();
     } while (t_curr - t_prev < interval_ms);
     t_prev = t_curr;
