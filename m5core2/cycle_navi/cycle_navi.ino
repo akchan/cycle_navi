@@ -13,15 +13,19 @@
  * ====
  *
  * sizeof(int) -> 4 on M5stack
+ *
+ * GPU部分を整理。BLE SPP対応する。
+ * LovyanGFVの作り直し
+ * 描画プロセスの再検討。指離してから読み込みするようにする。
  */
 
-
+#include "SdFatConfig.h"
+#include <SdFat.h> // Define SdFat.h before LovyanGFX.hpp
 #include <M5Core2.h>
 #include <math.h>
-#include "SdFat.h"  // Define SdFat.h before LovyanGFX.hpp
 #include <TinyGPSPlus.h> // Installed through arduino IDE library manager
 
-#define LGFX_USE_V1  // Use v1.0.0
+#define LGFX_M5STACK_CORE2
 #include <LovyanGFX.hpp> // Installed through arduino IDE library manager
 #include <LGFX_AUTODETECT.hpp>
 
@@ -31,79 +35,21 @@
 #include "sound_gps_inactive.h"
 #include "satellite_icon.h"
 
-
-// ================================================================================
-// SdFat settings
-// ================================================================================
-// SD_FAT_TYPE = 0 for SdFat/File as defined in SdFatConfig.h,
-// 1 for FAT16/FAT32, 2 for exFAT, 3 for FAT16/FAT32 and exFAT.
-#ifdef SF_FAT_TYPE
-#undef SF_FAT_TYPE
-#endif
-#define SD_FAT_TYPE 3
-
-// SDCARD_SS_PIN is defined for the built-in SD on some boards.
-#ifndef SDCARD_SS_PIN
-const uint8_t SD_CS_PIN = SS;
-#else  // SDCARD_SS_PIN
-// Assume built-in SD is used.
-const uint8_t SD_CS_PIN = SDCARD_SS_PIN;
-#endif  // SDCARD_SS_PIN
-
-// Try max SPI clock for an SD. Reduce SPI_CLOCK if errors occur.
-#define SPI_CLOCK SD_SCK_MHZ(25)
-
-// Defined in SdFat\src\SdFatConfig.h
-// 1 is default, 0 is needed for M5stack.
-#ifdef ENABLE_DEDICATED_SPI
-#undef ENABLE_DEDICATED_SPI
-#endif
-#define ENABLE_DEDICATED_SPI 0
-
-// Try to select the best SD card configuration.
-#if HAS_SDIO_CLASS
-#define SD_CONFIG SdioConfig(FIFO_SDIO)
-#elif  ENABLE_DEDICATED_SPI
-#define SD_CONFIG SdSpiConfig(SD_CS_PIN, DEDICATED_SPI, SPI_CLOCK)
-#else  // HAS_SDIO_CLASS
-//#define SD_CONFIG SdSpiConfig(SD_CS_PIN, SHARED_SPI, SPI_CLOCK)
-// TFCARD_CS_PIN is defined in M5Stack Config.h (Pin 4)
-#define SD_CONFIG SdSpiConfig(TFCARD_CS_PIN, SHARED_SPI, SPI_CLOCK)
-#endif  // HAS_SDIO_CLASS
-
-#if SD_FAT_TYPE == 0
-SdFat sd;
-File file;
-#define SDFAT_FSFILE_TYPE File
-#elif SD_FAT_TYPE == 1
-SdFat32 sd;
-File32 file;
-#define SDFAT_FSFILE_TYPE File32
-#elif SD_FAT_TYPE == 2
-SdExFat sd;
-ExFile file;
-#define SDFAT_FSFILE_TYPE ExFile
-#elif SD_FAT_TYPE == 3
-SdFs sd;
-FsFile file;
-#define SDFAT_FSFILE_TYPE FsFile
-#else  // SD_FAT_TYPE
-#error Invalid SD_FAT_TYPE
-#endif  // SD_FAT_TYPE
-
-// ================================================================================
+// ===============================================================================
 // Variables declaration
 // ================================================================================
+// Common
+#define CYCLE_NAVI_VERSION 100
+#define CYCLE_NAVI_VERSION_STRING "1.0"
+#define SUCCESS 1
+#define ERROR 0
+
 // Settings
 const unsigned long interval_sec = 1;
 const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
 const char route_dir_path[] = "/route_dat";
 const char point_dir_path[] = "/point_dat";
-
-// Common
-#define SUCCESS 1
-#define ERROR 0
 
 // Variables [GPS]
 TinyGPSPlus gps;
@@ -216,6 +162,23 @@ QueueHandle_t update_tile_queue;
 
 bool use_sound;
 
+// ================================================================================
+// SdFat settings
+// ================================================================================
+// SD_FAT_TYPE = 0 for SdFat/File as defined in SdFatConfig.h,
+// 1 for FAT16/FAT32, 2 for exFAT, 3 for FAT16/FAT32 and exFAT.
+#define SD_FAT_TYPE 3  // Use SD_FAT_TYPE 3 for LovyanGFX
+SdFs sd;
+FsFile file;
+#define SDFAT_FSFILE_TYPE FsFile
+
+// Try max SPI clock for an SD. Reduce SPI_CLOCK if errors occur.
+// The max SPI clock is around 24 MHz for M5Stack Core2.
+#define SPI_CLOCK SD_SCK_MHZ(24)
+
+// Try to select the best SD card configuration.
+// M5Core2 shares SPI but between SD card and the LCD display
+#define SD_CONFIG SdSpiConfig(TFCARD_CS_PIN, SHARED_SPI, SPI_CLOCK)
 
 // ================================================================================
 // GPS
@@ -431,9 +394,9 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
     int prev_point_x, prev_point_y, point_x, point_y;
 
     genRoutePath(file_path, zoom, tile_x, tile_y);
-    
+
     SDFAT_FSFILE_TYPE route_dat;
-    
+
     if (route_dat.open(file_path, O_RDONLY))
     {
         if (route_dat.fileSize() % (sizeof(int) * 2) == 0 &&
@@ -1191,10 +1154,13 @@ bool checkIfUseSound()
 {
     bool ret = false;
 
-    if (file.open("/useSound", O_RDONLY)) {
+    if (file.open("/useSound", O_RDONLY))
+    {
         ret = true;
         Serial.println("checkIfUseSound(): useSound=true");
-    } else {
+    }
+    else
+    {
         Serial.println("checkIfUseSound(): useSound=false");
     }
     file.close();
@@ -1351,15 +1317,18 @@ void setupButtonHandlers()
     M5.BtnC.addHandler(centeringHandler, E_RELEASE);
 }
 
-void initMapVariables(){
-    if (file.open("/initPoint", O_RDONLY)) {
+void initMapVariables()
+{
+    if (file.open("/initPoint", O_RDONLY))
+    {
         Serial.println("initMapVariables(): initPoint file was detected.");
 
         zoom = read4BytesAsInt(file);
         curr_gps_idx_coords.idx_x = read4BytesAsInt(file);
         curr_gps_idx_coords.idx_y = read4BytesAsInt(file);
     }
-    else {
+    else
+    {
         Serial.println("initMapVariables(): initPoint file was not detected.");
         Serial.println("initMapVariables(): Default point was loaded.");
 
@@ -1389,29 +1358,30 @@ void setup(void)
     lcd.setBrightness(brightness_list[i_brightness]);
 
     lcd.setTextSize(2);
-    lcd.println("Initializing...");
+    lcd.println("Initializing");
 
     // Serial connection for debug
-    Serial.println("Initializing...");
+    Serial.println("Initializing");
 
     // Serial connection to GPS module
     Serial2.begin(9600, SERIAL_8N1, 13, 14);
 
     // Initialize the SD card.
-    if (!sd.begin(SD_CONFIG)) {
+    if (!sd.begin(SD_CONFIG))
+    {
         sd.initErrorHalt(&Serial);
     }
+
+    // Initializing sound
+    use_sound = checkIfUseSound();
+    if (use_sound)
+        playBoot();
 
     // Initialize zoom_list
     initZoomList(map_dir_path);
 
     // Initialize sprites for image cache
     initTileCache();
-
-    // Initializing sound
-    use_sound = checkIfUseSound();
-    if (use_sound)
-        playBoot();
 
     // Initializing button handlers
     setupButtonHandlers();

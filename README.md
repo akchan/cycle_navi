@@ -13,14 +13,22 @@ Simple navigation system using M5Stack Core2
 - M5Stack Core2
 - M5Stack GPS module v2
 - M5Go for core2 bottom mobule
+    - Use M3 screw on the bottom to mount M5Stack to the handle of your bicycle.
 - SD card (TF card)
     - formatted as exFAT with small allocation unit size (ex. 2048 byte/block)
     - If you use mac, use `newfs_exfat -b 2048 {device}` command instead of `Disk utility.app` which can't specify the allocation unit size.
 
 ### Recommended
 
-- GPS antena (for better signal)
+- External GPS antena (for better signal)
 - USB battery (for extended operating time)
+
+# Sofrware requirements
+
+- M5Stack Core2 board library (2.0.8)
+- TinyGPSPlus (1.0.3)
+- SdFat (2.2.2)
+- LovyanGFX (1.0.9)
 
 # Usage
 
@@ -42,7 +50,7 @@ cp -r map_route /mnt/sd
 umount /mnt/sd
 
 # 6. Insert the SD card to M5Stack Core2.
-# 7. Write M5Stack Core2 program via arduino SDK.
+# 7. Write M5Stack Core2 program via arduino IDE.
 ```
 
 # Licence
