@@ -19,11 +19,10 @@
  * 描画プロセスの再検討。指離してから読み込みするようにする。
  */
 
-#include "SdFatConfig.h"
 #include <SdFat.h> // Define SdFat.h before LovyanGFX.hpp
 #include <M5Core2.h>
-#include <math.h>
 #include <TinyGPSPlus.h> // Installed through arduino IDE library manager
+#include <math.h>
 
 #define LGFX_M5STACK_CORE2
 #include <LovyanGFX.hpp> // Installed through arduino IDE library manager
@@ -43,6 +42,7 @@
 #define CYCLE_NAVI_VERSION_STRING "1.0"
 #define SUCCESS 1
 #define ERROR 0
+#define VERBOSE 1 // Set non-zero for verbose log mode
 
 // Settings
 const unsigned long interval_sec = 1;
@@ -50,6 +50,7 @@ const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
 const char route_dir_path[] = "/route_dat";
 const char point_dir_path[] = "/point_dat";
+const char init_point_path[] = "/initPoint";
 
 // Variables [GPS]
 TinyGPSPlus gps;
@@ -58,7 +59,7 @@ unsigned long t_prev, t_curr;
 bool is_gps_active = false;
 const int gps_count_th = 3;
 bool isUpdatedPrev = false;
-int gps_count = 0;
+int gps_active_counter = 0;
 
 struct st_tile_coords
 {
@@ -66,30 +67,31 @@ struct st_tile_coords
     int tile_x;
     int tile_y;
 };
-struct st_idx_on_tile
-{
-    int idx_x;
-    int idx_y;
-};
 struct st_idx_coords
 {
+    int zoom;
     int idx_x;
     int idx_y;
 };
 // Initial point (Tokyo station)
-int z_init = 14, idx_coords_x_init = 14552 * 256 + 218, idx_coords_y_init = 6451 * 256 + 165;
-st_idx_coords curr_gps_idx_coords = {0, 0};
+const int z_init = 14;
+const int idx_coords_x_init = 14552 * 256 + 218;
+const int idx_coords_y_init = 6451 * 256 + 165;
+st_idx_coords curr_gps_idx_coords = {
+    -1,
+    idx_coords_x_init,
+    idx_coords_y_init};
+st_idx_coords display_center_idx_coords = {
+    z_init,
+    idx_coords_x_init,
+    idx_coords_y_init};
+int i_smart_loading = 0;
+bool centering_mode = true;
 
 // Variables [map & route]
-// Color name:
-//   TFT_BLACK, TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_PURPLE,
-//   TFT_OLIVE, TFT_LIGHTGREY, TFT_DARKGREY, TFT_BLUE, TFT_GREENYELLOW,
-//   TFT_GREEN, TFT_YELLOW, TFT_ORANGE, TFT_PINK, TFT_CYAN, TFT_DARKCYAN,
-//   TFT_RED, TFT_MAGENTA, TFT_WHITE
-#define NO_TILE_COLOR TFT_LIGHTGREY
 #define LEN_FILE_PATH 35
-char file_path[LEN_FILE_PATH];
 const int tile_size = 256;
+const int tile_size_power = (int)round(log2(tile_size));
 const int n_sprite_x = 3;
 const int n_sprite_y = 3;
 const int n_sprite = n_sprite_x * n_sprite_y;
@@ -98,26 +100,32 @@ static LGFX_Sprite canvas(&lcd); // screen buffer
 LGFX_Sprite dir_icon(&canvas);
 LGFX_Sprite gps_icon(&canvas);
 LGFX_Sprite updating_icon(&canvas);
-#define UPDATING_ICON_WIDTH 16
 struct sprite_struct
 {
-    int zoom;
-    int tile_x;
-    int tile_y;
+    st_tile_coords tile_coords;
     LGFX_Sprite *sprite;
-    SemaphoreHandle_t mutex;
+    bool is_update_required;
 };
+sprite_struct tile_cache_buf[n_sprite];
 sprite_struct *tile_cache[n_sprite];
-st_idx_coords display_center_idx_coords = {0, 0};
-bool centering_mode = true;
+bool is_tile_cache_initialized = false;
 
 #define LEN_ZOOM_LIST 20
-int zoom_prev = -1, tile_x_prev = -1, tile_y_prev = -1;
-int zoom;
-int zoom_list[LEN_ZOOM_LIST];
-int n_zoom = -1;
-int zoom_list_i = 0;
+struct st_zoom
+{
+    int i;
+    int n;
+    int list[LEN_ZOOM_LIST];
+};
+st_zoom zoom;
 
+// Color name:
+//   TFT_BLACK, TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_PURPLE,
+//   TFT_OLIVE, TFT_LIGHTGREY, TFT_DARKGREY, TFT_BLUE, TFT_GREENYELLOW,
+//   TFT_GREEN, TFT_YELLOW, TFT_ORANGE, TFT_PINK, TFT_CYAN, TFT_DARKCYAN,
+//   TFT_RED, TFT_MAGENTA, TFT_WHITE
+#define NO_CACHE_COLOR TFT_WHITE
+#define NO_IMG_COLOR TFT_DARKGREY
 #define ROUTE_COLOR TFT_BLUE
 #define POINT_COLOR TFT_DARKGREEN
 #define ROUTE_WIDTH 7
@@ -128,25 +136,15 @@ int zoom_list_i = 0;
 #define DIR_ICON_BG_COLOR TFT_WHITE
 #define DIR_ICON_TRANS_COLOR TFT_BLACK
 #define DIR_ICON_R 14
-#define DIR_ICON_WIDTH 3
+#define DIR_ICON_EDGE_WIDTH 3
 #define DIR_ICON_ANGLE 45.0 / 180.0 * M_PI
-
-int updating_icon_n_line = 8;
-int i_shift_updating_icon = 0;
+const int dir_icon_palette_id_trans = 0;
+const int dir_icon_palette_id_bg = 1;
+const int dir_icon_palette_id_fg = 2;
 
 const int brightness_list[] = {255, 128, 64, 32};
 const int n_brightness = 4;
 int i_brightness = 0;
-
-#define LEN_QUEUE n_sprite * 2
-struct st_updateTileQueueData
-{
-    sprite_struct *p_sprite_struct;
-    int zoom;
-    int tile_x;
-    int tile_y;
-};
-QueueHandle_t update_tile_queue;
 
 // Variables [Sound]
 #define CONFIG_I2S_BCK_PIN 12
@@ -167,36 +165,47 @@ bool use_sound;
 // ================================================================================
 // SD_FAT_TYPE = 0 for SdFat/File as defined in SdFatConfig.h,
 // 1 for FAT16/FAT32, 2 for exFAT, 3 for FAT16/FAT32 and exFAT.
-#define SD_FAT_TYPE 3  // Use SD_FAT_TYPE 3 for LovyanGFX
+#define SD_FAT_TYPE 3 // Use SD_FAT_TYPE 3 for LovyanGFX
 SdFs sd;
 FsFile file;
 #define SDFAT_FSFILE_TYPE FsFile
 
 // Try max SPI clock for an SD. Reduce SPI_CLOCK if errors occur.
-// The max SPI clock is around 24 MHz for M5Stack Core2.
-#define SPI_CLOCK SD_SCK_MHZ(24)
+// The max SPI clock is around 25 MHz for M5Stack Core2.
+#define SPI_CLOCK SD_SCK_MHZ(25)
 
 // Try to select the best SD card configuration.
 // M5Core2 shares SPI but between SD card and the LCD display
 #define SD_CONFIG SdSpiConfig(TFCARD_CS_PIN, SHARED_SPI, SPI_CLOCK)
 
-// ================================================================================
-// GPS
-// ================================================================================
-int calcCoords2TileCoords(st_tile_coords &tile_coords, int zoom, double lon,
-                          double lat)
-{
-    int method = 2;
-    // 0: tan
-    // 1: sin
-    // 2: sin_cos
-    // 3: cos_tan
+/* ================================================================================
+ * GPS
+ * ================================================================================
+ * LonLat: Longitude and latitude system
+ * IdxCoords: Pixel index of web Mercator system
+ * TileCoords: Tile index of web Mercator system
+ */
 
-    if (lat <= 90.0 && lat >= -90.0)
+int calcLonLat2TileCoords(st_tile_coords &tile_coords,
+                          int zoom, double lon, double lat,
+                          int method = 2)
+{
+    // Methods:
+    //   0: tan
+    //   1: sin
+    //   2: sin_cos
+    //   3: cos_tan
+
+    if (lon < -180.0 || 180.0 < lon)
+    {
+        return ERROR;
+    }
+
+    if (-90.0 <= lat && lat <= 90.0)
     {
         // valid latitude case
         double r = 1.0 / (2 * M_PI);
-        double x_raw = 2 * M_PI * r * (lon + 180.0) / 360.0;
+        double x_raw = (lon + 180.0) / 360.0;
 
         double y_raw, rad;
         if (method == 0)
@@ -219,6 +228,10 @@ int calcCoords2TileCoords(st_tile_coords &tile_coords, int zoom, double lon,
             rad = lat / 180.0 * M_PI;
             y_raw = r * log(1.0 / cos(rad) + tan(rad));
         }
+        else
+        {
+            return ERROR;
+        }
 
         tile_coords.zoom = zoom;
         tile_coords.tile_x = (int)floor(x_raw * (1 << zoom));
@@ -226,81 +239,560 @@ int calcCoords2TileCoords(st_tile_coords &tile_coords, int zoom, double lon,
 
         return SUCCESS;
     }
-    else
-    {
-        // Invalid latitude case
-        tile_coords.zoom = zoom;
-        tile_coords.tile_x = -1;
-        tile_coords.tile_y = -1;
-
-        return ERROR;
-    }
+    return ERROR;
 }
 
-int calcIdxOnTile(st_idx_on_tile &idx_on_tile, int zoom, int lon, int lat,
-                  int tile_size)
+int calcLonLat2IdxCoords(st_idx_coords &idx_coords, double lon, double lat,
+                         int zoom, int tile_size_power)
 {
-    st_tile_coords tile_coords1, tile_coords2;
+    /*
+     * tile_size_power: log2(tile_size)
+     */
+    st_tile_coords tile_coords_tmp;
     int ret;
 
-    ret = calcCoords2TileCoords(tile_coords1, zoom, lon, lat);
+    int zoom_for_idx_coords = zoom + tile_size_power;
+
+    ret = calcLonLat2TileCoords(tile_coords_tmp, zoom_for_idx_coords, lon, lat);
     if (ret == ERROR)
+    {
         return ERROR;
+    }
 
-    if (tile_size <= 0)
-        return ERROR;
-    int zoom2 = zoom + (int)log2(tile_size);
-
-    ret = calcCoords2TileCoords(tile_coords2, zoom2, lon, lat);
-    if (ret == ERROR)
-        return ERROR;
-
-    idx_on_tile.idx_x = tile_coords2.tile_x - tile_coords1.tile_x * tile_size;
-    idx_on_tile.idx_y = tile_coords2.tile_y - tile_coords1.tile_y * tile_size;
+    idx_coords.zoom = zoom;
+    idx_coords.idx_x = tile_coords_tmp.tile_x;
+    idx_coords.idx_y = tile_coords_tmp.tile_y;
 
     return SUCCESS;
 }
 
-void calcCoordsIdx2Tile(st_tile_coords &tile_coords, st_idx_coords &idx_coords,
-                        int tile_size)
+void convIdxCoords2TileCoords(st_idx_coords &idx_coords, st_tile_coords &tile_coords,
+                              int tile_size)
 {
+    tile_coords.zoom = idx_coords.zoom;
     tile_coords.tile_x = idx_coords.idx_x / tile_size;
     tile_coords.tile_y = idx_coords.idx_y / tile_size;
 }
 
-void calcCoordsIdx2IdxOnTile(st_idx_on_tile &idx_on_tile,
-                             st_idx_coords &idx_coords, int tile_size)
+void convIdxCoordsForZoom(st_idx_coords &src_idx_coords, st_idx_coords &dst_idx_coords,
+                          bool correct_tile_center = true)
 {
-    idx_on_tile.idx_x = idx_coords.idx_x % tile_size;
-    idx_on_tile.idx_y = idx_coords.idx_y % tile_size;
+    int zoom_diff = dst_idx_coords.zoom - src_idx_coords.zoom;
+    double idx_x = src_idx_coords.idx_x;
+    double idx_y = src_idx_coords.idx_y;
+
+    if (correct_tile_center)
+    {
+        idx_x += 0.5;
+        idx_y += 0.5;
+    }
+
+    dst_idx_coords.idx_x = (int)floor(idx_x * pow(2, zoom_diff));
+    dst_idx_coords.idx_y = (int)floor(idx_y * pow(2, zoom_diff));
 }
 
-int calcCoords2CoordsIdx(st_idx_coords &idx_coords, double lon, double lat,
-                         int zoom, int tile_size)
+void checkGPS()
 {
-    st_tile_coords tile_coords;
+    if (gps.location.isValid())
+    {
+        bool isUpdated = gps.location.isUpdated();
 
-    if (tile_size <= 0)
-        return ERROR;
-    int zoom2 = zoom + (int)log2(tile_size);
+        if (isUpdated != isUpdatedPrev)
+        {
+            gps_active_counter = 0;
+        }
 
-    int ret = calcCoords2TileCoords(tile_coords, zoom2, lon, lat);
-    if (ret == ERROR)
-        return ERROR;
+        isUpdatedPrev = isUpdated;
 
-    idx_coords.idx_x = tile_coords.tile_x;
-    idx_coords.idx_y = tile_coords.tile_y;
+        if (isUpdated)
+        {
+            if (VERBOSE)
+            {
+                Serial.println("checkGPS(): GPS is available.");
+            }
 
-    return SUCCESS;
+            if ((!is_gps_active) && gps_active_counter == gps_count_th)
+            {
+                is_gps_active = true;
+
+                if (use_sound)
+                {
+                    playGPSActive();
+                    if (VERBOSE)
+                    {
+                        Serial.println("checkGPS(): playGPSActive() was invoked.");
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (VERBOSE)
+            {
+                Serial.println("checkGPS(): GPS is unavailable.");
+            }
+
+            if (is_gps_active && gps_active_counter == gps_count_th)
+            {
+                is_gps_active = false;
+
+                if (use_sound)
+                {
+                    playGPSInactive();
+                    if (VERBOSE)
+                    {
+                        Serial.println("checkGPS(): playGPSInactive() was invoked.");
+                    }
+                }
+            }
+        }
+        gps_active_counter++;
+
+        // Update curr_gps_idx_coords with gps data
+        calcLonLat2IdxCoords(curr_gps_idx_coords, gps.location.lng(), gps.location.lat(),
+                             zoom_level(), tile_size_power);
+
+        if (centering_mode)
+        {
+            display_center_idx_coords.zoom = zoom_level();
+            display_center_idx_coords.idx_x = curr_gps_idx_coords.idx_x;
+            display_center_idx_coords.idx_y = curr_gps_idx_coords.idx_y;
+        }
+
+        if (VERBOSE)
+        {
+            Serial.printf("checkGPS()\n");
+            Serial.printf("  gps=(%f, %f), satellites=%d\n",
+                          gps.location.lng(),
+                          gps.location.lat(),
+                          gps.satellites.value());
+            Serial.printf("  curr_gps_idx_coords=(z=%d,x=%d,y=%d)\n",
+                          curr_gps_idx_coords.zoom,
+                          curr_gps_idx_coords.idx_x,
+                          curr_gps_idx_coords.idx_y);
+            Serial.printf("  display_center_idx_coords=(z=%d,x=%d,y=%d)\n",
+                          display_center_idx_coords.zoom,
+                          display_center_idx_coords.idx_x,
+                          display_center_idx_coords.idx_y);
+        }
+    }
+    else
+    {
+        if (VERBOSE)
+        {
+            Serial.printf("checkGPS(): gps.location.isValid() = false\n");
+        }
+    }
 }
-
 // ================================================================================
 // Tile cache
 // ================================================================================
-void genMapPath(char *file_path, int z, int tile_x, int tile_y)
+void genMapPath(char *file_path,
+                int z, int tile_x, int tile_y)
 {
     snprintf(file_path, LEN_FILE_PATH, "%s/%d/%d/%d.jpg", map_dir_path, z, tile_x,
              tile_y);
+}
+
+void initTileCache()
+{
+    int cap_dma, cap_spiram;
+    int cap_dma_after, cap_spiram_after;
+    if (VERBOSE)
+    {
+        cap_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        cap_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
+        Serial.printf("initTileCache():\n");
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_DMA):   %8d byte\n", cap_dma);
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_SPIRAM):%8d byte\n", cap_spiram);
+    }
+
+    for (int i = 0; i < n_sprite; i++)
+    {
+        tile_cache[i] = &tile_cache_buf[i];
+
+        tile_cache[i]->sprite = new LGFX_Sprite(&canvas);
+        tile_cache[i]->sprite->setPsram(true);
+        tile_cache[i]->sprite->createSprite(tile_size, tile_size);
+        tile_cache[i]->sprite->fillSprite(NO_CACHE_COLOR);
+
+        tile_cache[i]->tile_coords.zoom = -1;
+        tile_cache[i]->tile_coords.tile_x = -1;
+        tile_cache[i]->tile_coords.tile_y = -1;
+
+        tile_cache[i]->is_update_required = false;
+    }
+
+    if (VERBOSE)
+    {
+        cap_dma_after = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        cap_spiram_after = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
+        Serial.printf("  tile_cache[%d] allocated.\n", n_sprite);
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_DMA):   %8d byte (%d)\n",
+                      cap_dma_after, cap_dma_after - cap_dma);
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_SPIRAM):%8d byte (%d)\n",
+                      cap_spiram_after, cap_spiram_after - cap_spiram);
+    }
+
+    is_tile_cache_initialized = true;
+}
+
+void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
+{
+    char file_path[LEN_FILE_PATH];
+    uint32_t t;
+
+    genMapPath(file_path, zoom, tile_x, tile_y);
+
+    if (file.open(file_path, O_RDONLY))
+    {
+        if (VERBOSE)
+        {
+            t = millis();
+        }
+
+        sprite->drawJpgFile(sd, &file);
+
+        if (VERBOSE)
+        {
+            t = millis() - t;
+            Serial.printf("loadTile(): Updated (%d ms) %s\n", t, file_path);
+        }
+    }
+    else
+    {
+        sprite->fillSprite(NO_IMG_COLOR);
+        if (VERBOSE)
+        {
+            Serial.printf("loadTile(): Not found %s\n", file_path);
+        }
+    }
+    file.close();
+}
+
+int read4BytesAsInt(SDFAT_FSFILE_TYPE &file)
+{
+    int ret;
+
+    file.read((uint8_t *)&ret, sizeof(int));
+
+    return ret;
+}
+
+int mod(const int a, const int b)
+{
+    /*
+     * Return: Positive modulo evenif the variable a is negative.
+     */
+    int mod = a % b;
+    if (mod < 0)
+    {
+        mod += b;
+    }
+    return mod;
+}
+
+bool isStTileCoordsEqual(st_tile_coords &a, st_tile_coords &b)
+{
+    return a.zoom == b.zoom && a.tile_x == b.tile_x && a.tile_y == b.tile_y;
+}
+
+void shiftTileCache(int shift_x, int shift_y)
+{
+    int idx_shifted_x;
+    int idx_shifted_y;
+    int k;
+    sprite_struct *tile_cache_tmp[n_sprite];
+
+    for (int i = 0; i < n_sprite_x; i++)
+    {
+        for (int j = 0; j < n_sprite_y; j++)
+        {
+            idx_shifted_x = mod(i + shift_x, n_sprite_x);
+            idx_shifted_y = mod(j + shift_y, n_sprite_y);
+            k = idx_shifted_x + idx_shifted_y * n_sprite_x;
+
+            tile_cache_tmp[k] = tile_cache[i + j * n_sprite_x];
+        }
+    }
+
+    for (int i = 0; i < n_sprite; i++)
+    {
+        tile_cache[i] = tile_cache_tmp[i];
+    }
+}
+
+void checkSpriteUpdateRequired()
+{
+    int k;
+    const int i_center = n_sprite_x / 2;
+    const int j_center = n_sprite_y / 2;
+    st_tile_coords center_tile_coords;
+    st_tile_coords tile_coords_curr;
+    st_tile_coords tile_coords_tgt;
+
+    if (VERBOSE)
+    {
+        Serial.printf("checkSpriteUpdateRequired():\n");
+    }
+
+    convIdxCoords2TileCoords(display_center_idx_coords, center_tile_coords, tile_size);
+
+    for (int i = 0; i < n_sprite_x; i++)
+    {
+        for (int j = 0; j < n_sprite_y; j++)
+        {
+            k = i + j * n_sprite_x;
+
+            if (VERBOSE)
+            {
+                Serial.printf("  i=%d,j=%d,k=%d ", i, j, k);
+            }
+
+            tile_coords_tgt.zoom = center_tile_coords.zoom;
+            tile_coords_tgt.tile_x = center_tile_coords.tile_x + (i - i_center);
+            tile_coords_tgt.tile_y = center_tile_coords.tile_y + (j - j_center);
+
+            if (isStTileCoordsEqual(tile_cache[k]->tile_coords, tile_coords_tgt))
+            {
+                if (VERBOSE)
+                {
+                    Serial.printf("up-to-date");
+                }
+            }
+            else
+            {
+                if (VERBOSE)
+                {
+                    Serial.printf(" update required. ");
+                    Serial.printf("curr=(z=%d,x=%d,y=%d) ",
+                                  tile_cache[k]->tile_coords.zoom,
+                                  tile_cache[k]->tile_coords.tile_x,
+                                  tile_cache[k]->tile_coords.tile_y);
+                    Serial.printf("tgt=(z=%d,x=%d,y=%d) ",
+                                  tile_coords_tgt.zoom,
+                                  tile_coords_tgt.tile_x,
+                                  tile_coords_tgt.tile_y);
+                }
+
+                tile_cache[k]->tile_coords = tile_coords_tgt;
+                tile_cache[k]->is_update_required = true;
+                tile_cache[k]->sprite->fillSprite(NO_CACHE_COLOR);
+            }
+
+            Serial.printf("\n");
+        }
+    }
+}
+
+void updateTileCache()
+{
+    /*
+     * Update tile_cache based on display_center_idx_coords
+     *
+     * Return:
+     *
+     * If any tiles updated (or shifted), true will be returned.
+     */
+    const int i_center_sprite = n_sprite / 2;
+    int tile_shift_x = 0;
+    int tile_shift_y = 0;
+    st_tile_coords center_tile_coords;
+    st_tile_coords center_tile_coords_tgt;
+
+    if (VERBOSE)
+    {
+        Serial.printf("updateTileCache():\n");
+    }
+
+    if (!is_tile_cache_initialized)
+    {
+        if (VERBOSE)
+        {
+            Serial.printf("  Passed. tile_cache is not initialized.\n");
+        }
+        return;
+    }
+
+    center_tile_coords = tile_cache[i_center_sprite]->tile_coords;
+    convIdxCoords2TileCoords(display_center_idx_coords, center_tile_coords_tgt, tile_size);
+
+    if (VERBOSE)
+    {
+        Serial.printf("  display_center_idx_coords (z=%d,x=%d,y=%d)\n",
+                      display_center_idx_coords.zoom,
+                      display_center_idx_coords.idx_x,
+                      display_center_idx_coords.idx_y);
+        Serial.printf("  center_tile_coords        (z=%d,x=%d,y=%d)\n",
+                      center_tile_coords.zoom,
+                      center_tile_coords.tile_x,
+                      center_tile_coords.tile_y);
+        Serial.printf("  center_tile_coords_tgt    (z=%d,x=%d,y=%d)\n",
+                      center_tile_coords_tgt.zoom,
+                      center_tile_coords_tgt.tile_x,
+                      center_tile_coords_tgt.tile_y);
+    }
+
+    if (!isStTileCoordsEqual(center_tile_coords, center_tile_coords_tgt))
+    {
+        tile_shift_x = center_tile_coords.tile_x - center_tile_coords_tgt.tile_x;
+        tile_shift_y = center_tile_coords.tile_y - center_tile_coords_tgt.tile_y;
+
+        if (VERBOSE)
+        {
+            Serial.printf("  tile_shift (x=%d,y=%d)\n", tile_shift_x, tile_shift_y);
+        }
+
+        shiftTileCache(tile_shift_x, tile_shift_y);
+
+        checkSpriteUpdateRequired();
+    }
+}
+
+void pushTileCache()
+{
+    int is_update_required;
+    int x, y;
+
+    if (VERBOSE)
+    {
+        Serial.printf("pushTileCache():\n");
+    }
+
+    for (int i = 0; i < n_sprite; i++)
+    {
+        x = tile_cache[i]->tile_coords.tile_x * tile_size - display_center_idx_coords.idx_x + lcd.width() / 2;
+        y = tile_cache[i]->tile_coords.tile_y * tile_size - display_center_idx_coords.idx_y + lcd.height() / 2;
+
+        tile_cache[i]->sprite->pushSprite(x, y);
+
+        if (VERBOSE)
+        {
+            Serial.printf("  i:%i, tile=(%d,%d), offset=(%d,%d)\n", i, tile_cache[i]->tile_coords.tile_x, tile_cache[i]->tile_coords.tile_y, x, y);
+        }
+    }
+}
+
+// ================================================================================
+// Smart tile loading
+// ================================================================================
+void smartTileLoading(const bool draw_canvas = true)
+{
+    int j;
+    int tile_zoom, tile_x, tile_y;
+    LGFX_Sprite *p_tile_sprite;
+
+    if (VERBOSE)
+    {
+        Serial.printf("smartTileLoading():\n");
+    }
+
+    for (int i = 0; i < n_sprite; i++)
+    {
+        j = mod(i_smart_loading + i, n_sprite);
+
+        if (tile_cache[j]->is_update_required)
+        {
+            M5.update();
+            if (M5.Touch.ispressed() || !is_tile_cache_initialized)
+            {
+                i_smart_loading = j;
+
+                if (VERBOSE)
+                {
+                    Serial.printf("%d interrupted\n", j);
+                }
+
+                break;
+            }
+
+            if (VERBOSE)
+            {
+                Serial.printf("  Updating (i=%d,z=%d,tile_x=%d,tile_y=%d)\n    ",
+                              i, tile_zoom, tile_x, tile_y);
+            }
+
+            p_tile_sprite = tile_cache[j]->sprite;
+            tile_zoom = tile_cache[j]->tile_coords.zoom;
+            tile_x = tile_cache[j]->tile_coords.tile_x;
+            tile_y = tile_cache[j]->tile_coords.tile_y;
+
+            loadTile(p_tile_sprite, tile_zoom, tile_x, tile_y);
+
+            if (VERBOSE)
+            {
+                Serial.printf("    ");
+            }
+            loadRoute(p_tile_sprite, tile_zoom, tile_x, tile_y);
+
+            if (VERBOSE)
+            {
+                Serial.printf("    ");
+            }
+            loadPoint(p_tile_sprite, tile_zoom, tile_x, tile_y);
+
+            tile_cache[j]->is_update_required = false;
+
+            if (draw_canvas)
+            {
+                drawCanvas();
+            }
+        }
+    }
+}
+// ================================================================================
+// MapTile
+// ================================================================================
+bool isWithinTile(int x, int y, int tile_size_x, int tile_size_y)
+{
+    if (0 <= x && x < tile_size_x && 0 <= y && y < tile_size_y)
+        return true;
+    else
+        return false;
+}
+
+void initMapVariables()
+{
+    if (file.open(init_point_path, O_RDONLY))
+    {
+        if (VERBOSE)
+        {
+            Serial.println("initMapVariables(): initPoint file was detected.");
+        }
+
+        curr_gps_idx_coords.zoom = read4BytesAsInt(file);
+        curr_gps_idx_coords.idx_x = read4BytesAsInt(file);
+        curr_gps_idx_coords.idx_y = read4BytesAsInt(file);
+    }
+    else
+    {
+        if (VERBOSE)
+        {
+            Serial.println("initMapVariables(): initPoint file was not detected.");
+            Serial.println("initMapVariables(): The default point was loaded.");
+        }
+
+        curr_gps_idx_coords.zoom = z_init;
+        curr_gps_idx_coords.idx_x = idx_coords_x_init;
+        curr_gps_idx_coords.idx_y = idx_coords_y_init;
+    }
+    file.close();
+
+    if (VERBOSE)
+    {
+        Serial.printf("initMapVariables(): zoom:%d, curr_gps_idx_coords idx_x:%d, idx_y:%d\n", curr_gps_idx_coords.zoom, curr_gps_idx_coords.idx_x, curr_gps_idx_coords.idx_y);
+    }
+
+    display_center_idx_coords = curr_gps_idx_coords;
+}
+
+void initCanvas()
+{
+    canvas.setPsram(true);
+    canvas.createSprite(lcd.width(), lcd.height());
+    canvas.fillSprite(NO_CACHE_COLOR);
 }
 
 void genRoutePath(char *file_path, int z, int tile_x, int tile_y)
@@ -315,109 +807,45 @@ void genPointPath(char *file_path, int z, int tile_x, int tile_y)
              tile_x, tile_y);
 }
 
-void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
-{
-    genMapPath(file_path, zoom, tile_x, tile_y);
-    // File fp = sd.open(file_path, FILE_READ);
-    if (file.open(file_path, O_RDONLY))
-    {
-        uint32_t t = millis();
-
-        // sprite->drawJpgFile(SD, file_path);
-        sprite->drawJpgFile(sd, &file);
-
-        t = millis() - t;
-        Serial.printf("MapTile was updated. (%d ms) %s\n", t, file_path);
-    }
-    else
-    {
-        sprite->fillSprite(NO_TILE_COLOR);
-        Serial.print("Map was not found.\n");
-        Serial.println(file_path);
-    }
-    file.close();
-}
-
-void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
-                        int stroke, uint16_t color)
-{
-    int center_i = stroke / 2;
-    int r = (stroke - 1) / 2;
-    int x_shift, y_shift;
-
-    double angle_rad = atan((double)(y_2 - y_1) / (x_2 - x_1));
-
-    // sprite->setColor(color);
-
-    // when line is nearly vertical
-    if (angle_rad >= M_PI / 4.0 || angle_rad <= -M_PI / 4.0)
-    {
-        for (int i_x = 0; i_x < stroke; i_x++)
-        {
-            x_shift = i_x - center_i;
-            sprite->drawLine(x_1 + x_shift, y_1, x_2 + x_shift, y_2, color);
-        }
-    }
-    // when line is nearly horizontal
-    else
-    {
-        for (int i_y = 0; i_y < stroke; i_y++)
-        {
-            y_shift = i_y - center_i;
-            sprite->drawLine(x_1, y_1 + y_shift, x_2, y_2 + y_shift, color);
-        }
-    }
-
-    sprite->fillCircle(x_1, y_1, r, color);
-    sprite->fillCircle(x_2, y_2, r, color);
-}
-
-int read4BytesAsInt(SDFAT_FSFILE_TYPE &file)
-{
-    int ret;
-
-    file.read((uint8_t *)&ret, sizeof(int));
-
-    return ret;
-}
-
-bool is_within_tile(int x, int y, int tile_size_x, int tile_size_y)
-{
-    if (0 <= x && x < tile_size_x && 0 <= y && y < tile_size_y)
-        return true;
-    else
-        return false;
-}
-
 void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
     int prev_point_x, prev_point_y, point_x, point_y;
+    char file_path[LEN_FILE_PATH];
+
+    if (VERBOSE)
+    {
+        Serial.print("loadRoute(): ");
+    }
 
     genRoutePath(file_path, zoom, tile_x, tile_y);
 
-    SDFAT_FSFILE_TYPE route_dat;
-
-    if (route_dat.open(file_path, O_RDONLY))
+    if (file.open(file_path, O_RDONLY))
     {
-        if (route_dat.fileSize() % (sizeof(int) * 2) == 0 &&
-            route_dat.fileSize() / sizeof(int) / 2 > 1)
-        {
-            Serial.printf("Route dat was detected.  %s\n", file_path);
+        uint64_t route_dat_size = file.fileSize();
+        int size_of_a_point = (sizeof(int) * 2);
 
-            if (route_dat.available())
+        if (route_dat_size % size_of_a_point == 0 &&
+            route_dat_size / size_of_a_point > 1)
+        {
+            if (VERBOSE)
             {
-                prev_point_x = read4BytesAsInt(route_dat);
-                prev_point_y = read4BytesAsInt(route_dat);
+                Serial.printf("Loaded from %s\n", file_path);
             }
 
-            while (route_dat.available())
+            if (file.available())
             {
-                point_x = read4BytesAsInt(route_dat);
-                point_y = read4BytesAsInt(route_dat);
+                prev_point_x = read4BytesAsInt(file);
+                prev_point_y = read4BytesAsInt(file);
+            }
+
+            while (file.available())
+            {
+                point_x = read4BytesAsInt(file);
+                point_y = read4BytesAsInt(file);
 
                 // Conditions to avoid an inapproriate line occuring when comes
                 // back to the same tile
-                if (is_within_tile(point_x, point_y, tile_size, tile_size) || is_within_tile(prev_point_x, prev_point_y, tile_size, tile_size))
+                if (isWithinTile(point_x, point_y, tile_size, tile_size) || isWithinTile(prev_point_x, prev_point_y, tile_size, tile_size))
                 {
                     drawLineWithStroke(sprite, prev_point_x,
                                        prev_point_y, point_x, point_y,
@@ -430,481 +858,219 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
         }
         else
         {
-            Serial.printf("Invalid route dat:  %s\n", file_path);
+            if (VERBOSE)
+            {
+                Serial.printf("Invalid or small size %s\n", file_path);
+            }
         }
     }
     else
     {
-        Serial.printf("Route dat was not found.  %s\n", file_path);
+        if (VERBOSE)
+        {
+            Serial.printf("No route at %s\n", file_path);
+        }
     }
-    route_dat.close();
+    file.close();
 }
 
 void loadPoint(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
 {
     int point_x, point_y;
+    char file_path[LEN_FILE_PATH];
+
+    if (VERBOSE)
+    {
+        Serial.print("loadPoint():");
+    }
 
     genPointPath(file_path, zoom, tile_x, tile_y);
-    SDFAT_FSFILE_TYPE point_dat;
-    if (point_dat.open(file_path, O_RDONLY))
-    {
-        if (point_dat.fileSize() % (sizeof(int) * 2) == 0 &&
-            point_dat.fileSize() / sizeof(int) / 2 > 1)
-        {
-            Serial.printf("Point dat was detected.  %s\n", file_path);
 
-            while (point_dat.available())
+    if (file.open(file_path, O_RDONLY))
+    {
+        if (file.fileSize() % (sizeof(int) * 2) == 0 &&
+            file.fileSize() / sizeof(int) / 2 > 1)
+        {
+            if (VERBOSE)
             {
-                point_x = read4BytesAsInt(point_dat);
-                point_y = read4BytesAsInt(point_dat);
+                Serial.printf("Point dat was detected.  %s\n", file_path);
+            }
+
+            while (file.available())
+            {
+                point_x = read4BytesAsInt(file);
+                point_y = read4BytesAsInt(file);
 
                 sprite->fillCircle(point_x, point_y, POINT_R, POINT_COLOR);
             }
         }
         else
         {
-            Serial.printf("Invalid point dat:  %s\n", file_path);
+            if (VERBOSE)
+            {
+                Serial.printf("Invalid point dat:  %s\n", file_path);
+            }
         }
     }
     else
     {
-        Serial.printf("Point dat was not found.  %s\n", file_path);
-    }
-    point_dat.close();
-}
-
-void shiftTileCacheLeft(sprite_struct *tile_cache[], int n_sprite_x,
-                        int n_sprite_y)
-{
-    sprite_struct *ptr_tmp;
-
-    xQueueReset(update_tile_queue);
-
-    for (int i_y = 0; i_y < n_sprite_y; i_y++)
-    {
-        ptr_tmp = tile_cache[n_sprite_x * i_y];
-
-        for (int i_x = 0; i_x < n_sprite_x - 1; i_x++)
+        if (VERBOSE)
         {
-            tile_cache[n_sprite_x * i_y + i_x] =
-                tile_cache[n_sprite_x * i_y + i_x + 1];
-        }
-
-        tile_cache[n_sprite_x * i_y + n_sprite_x - 1] = ptr_tmp;
-
-        if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
-        {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
-
-            // unlock the tile
-            if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
-            {
-                Serial.printf("shiftTileCacheLeft(): Error in xSemaphoreGive() i=%d, ptr_tmp=%d\n", n_sprite_x * i_y + n_sprite_x - 1, ptr_tmp);
-            }
-        }
-        else
-        {
-            Serial.println("shiftTileCacheLeft(): passed because the tile was locked.");
+            Serial.printf("Point dat was not found.  %s\n", file_path);
         }
     }
+    file.close();
 }
 
-void shiftTileCacheRight(sprite_struct *tile_cache[], int n_sprite_x,
-                         int n_sprite_y)
+void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
+                        int stroke, uint16_t color)
 {
-    sprite_struct *ptr_tmp;
+    int center_i = stroke / 2; // floored automatically
+    int r = (stroke - 1) / 2;
+    int x_shift, y_shift;
+    double angle_rad;
 
-    xQueueReset(update_tile_queue);
-
-    for (int i_y = 0; i_y < n_sprite_y; i_y++)
+    if (x_1 != x_2)
     {
-        ptr_tmp = tile_cache[n_sprite_x * i_y + n_sprite_x - 1];
+        angle_rad = atan((double)(y_2 - y_1) / (x_2 - x_1));
+    }
+    else
+    {
+        angle_rad = M_PI_2;
+    }
 
-        for (int i_x = n_sprite_x - 1; i_x > 0; i_x--)
+    // when line is nearly horizontal
+    if (-M_PI_4 <= angle_rad && angle_rad <= M_PI_4)
+    {
+        for (int i_y = 0; i_y < stroke; i_y++)
         {
-            tile_cache[n_sprite_x * i_y + i_x] =
-                tile_cache[n_sprite_x * i_y + i_x - 1];
+            y_shift = i_y - center_i;
+            sprite->drawLine(x_1, y_1 + y_shift, x_2, y_2 + y_shift, color);
         }
-
-        tile_cache[n_sprite_x * i_y] = ptr_tmp;
-
-        if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
+    }
+    else // when line is nearly vertical
+    {
+        for (int i_x = 0; i_x < stroke; i_x++)
         {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
+            x_shift = i_x - center_i;
+            sprite->drawLine(x_1 + x_shift, y_1, x_2 + x_shift, y_2, color);
+        }
+    }
 
-            // unlock the tile
-            if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
-            {
-                Serial.printf("shiftTileCacheRight(): Error in xSemaphoreGive() i=%d, ptr_tmp=%d\n", n_sprite_x * i_y, ptr_tmp);
-            }
-        }
-        else
-        {
-            Serial.println("shiftTileCacheRight(): passed because the tile was locked.");
-        }
+    if (r > 0)
+    {
+        // Make round edges
+        sprite->fillCircle(x_1, y_1, r, color);
+        sprite->fillCircle(x_2, y_2, r, color);
     }
 }
 
-void shiftTileCacheX(sprite_struct *tile_cache[], int n_shift_x, int n_sprite_x,
-                     int n_sprite_y)
+void initDirIcon()
 {
-    if (n_shift_x > 0)
+    /*
+     * dir_icon color palette:
+     *   0: DIR_ICON_TRANS_COLOR
+     *   1: DIR_ICON_BG_COLOR
+     *   2: foreground color (DIR_ICON_COLOD_ACTIVE or DIR_ICON_COLOR_INACTIVE)
+     *   3: not used (default is TFT_WHITE)
+     */
+    if (VERBOSE)
     {
-        for (int i = 0; i < n_shift_x; i++)
-        {
-            shiftTileCacheRight(tile_cache, n_sprite_x, n_sprite_y);
-        }
+        Serial.printf("initDirIcon(): Initializing direction icon\n");
     }
-    else if (n_shift_x < 0)
-    {
-        for (int i = 0; i < abs(n_shift_x); i++)
-        {
-            shiftTileCacheLeft(tile_cache, n_sprite_x, n_sprite_y);
-        }
-    }
+
+    // Allocate sprite
+    dir_icon.setColorDepth(2);
+    gps_icon.setPsram(false);
+    dir_icon.createSprite(DIR_ICON_R * 2 + 1, DIR_ICON_R * 2 + 1);
+
+    // Set palette colors
+    dir_icon.setPaletteColor(dir_icon_palette_id_trans, DIR_ICON_TRANS_COLOR);
+    dir_icon.setPaletteColor(dir_icon_palette_id_bg, DIR_ICON_BG_COLOR);
+    dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_INACTIVE);
+
+    // Draw icon
+    dir_icon.fillSprite(dir_icon_palette_id_trans); // translucent background
+    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R, dir_icon_palette_id_fg);
+    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R - DIR_ICON_EDGE_WIDTH,
+                        dir_icon_palette_id_bg);
+
+    int x0 = DIR_ICON_R;
+    int y0 = DIR_ICON_EDGE_WIDTH;
+    int x1 = DIR_ICON_R + (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
+    int y1 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
+    int x2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
+    int y2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
+
+    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_palette_id_fg);
+
+    x0 = DIR_ICON_R;
+    y0 = (int)(DIR_ICON_R * 1.2);
+    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_palette_id_bg);
+
+    // set center of rotation
+    dir_icon.setPivot(DIR_ICON_R, DIR_ICON_R);
 }
 
-void shiftTileCacheUp(sprite_struct *tile_cache[], int n_sprite_x,
-                      int n_sprite_y)
+void pushDirIcon()
 {
-    sprite_struct *ptr_tmp;
-
-    xQueueReset(update_tile_queue);
-
-    for (int i_x = 0; i_x < n_sprite_x; i_x++)
-    {
-        ptr_tmp = tile_cache[i_x];
-
-        for (int i_y = 0; i_y < n_sprite_y - 1; i_y++)
-        {
-            tile_cache[n_sprite_x * i_y + i_x] =
-                tile_cache[n_sprite_x * (i_y + 1) + i_x];
-        }
-
-        tile_cache[n_sprite_x * (n_sprite_y - 1) + i_x] = ptr_tmp;
-
-        if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
-        {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
-
-            // unlock the tile
-            if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
-            {
-                Serial.printf("shiftTileCacheUp(): Error in xSemaphoreGive() i=%d, ptr_tmp=%d\n", n_sprite_x * (n_sprite_y - 1) + i_x, ptr_tmp);
-            }
-        }
-        else
-        {
-            Serial.println("shiftTileCacheUp(): passed because the tile was locked.");
-        }
-    }
-}
-
-void shiftTileCacheDown(sprite_struct *tile_cache[], int n_sprite_x,
-                        int n_sprite_y)
-{
-    sprite_struct *ptr_tmp;
-
-    xQueueReset(update_tile_queue);
-
-    for (int i_x = 0; i_x < n_sprite_x; i_x++)
-    {
-        ptr_tmp = tile_cache[n_sprite_x * (n_sprite_y - 1) + i_x];
-
-        for (int i_y = n_sprite_y - 1; i_y > 0; i_y--)
-        {
-            tile_cache[n_sprite_x * i_y + i_x] =
-                tile_cache[n_sprite_x * (i_y - 1) + i_x];
-        }
-
-        tile_cache[i_x] = ptr_tmp;
-
-        if (xSemaphoreTake(ptr_tmp->mutex, pdMS_TO_TICKS(0)))
-        {
-            ptr_tmp->sprite->fillSprite(NO_TILE_COLOR);
-
-            // unlock the tile
-            if (xSemaphoreGive(ptr_tmp->mutex) != pdTRUE)
-            {
-                Serial.printf("shiftTileCacheDown(): Error in xSemaphoreGive() i=%d, ptr_tmp=%d\n", i_x, ptr_tmp);
-            }
-        }
-        else
-        {
-            Serial.println("shiftTileCacheDown(): passed because the tile was locked.");
-        }
-    }
-}
-
-void shiftTileCacheY(sprite_struct *tile_cache[], int n_shift_y, int n_sprite_x,
-                     int n_sprite_y)
-{
-    if (n_shift_y > 0)
-    {
-        for (int i = 0; i < n_shift_y; i++)
-        {
-            shiftTileCacheDown(tile_cache, n_sprite_x, n_sprite_y);
-        }
-    }
-    else if (n_shift_y < 0)
-    {
-        for (int i = 0; i < abs(n_shift_y); i++)
-        {
-            shiftTileCacheUp(tile_cache, n_sprite_x, n_sprite_y);
-        }
-    }
-}
-
-void updateTileCache(sprite_struct *tile_cache[],
-                     int zoom, st_idx_coords &idx_coords,
-                     int n_sprite_x, int n_sprite_y,
-                     bool reset_gps_state_cursor = true)
-{
-    int i, tile_x, tile_y;
-    bool is_first_tile_loading = true;
-    st_updateTileQueueData queueData, queueDataTmp;
-
-    st_tile_coords tile_coords;
-    calcCoordsIdx2Tile(tile_coords, idx_coords, tile_size);
-
-    int center_tile_x = tile_coords.tile_x;
-    int center_tile_y = tile_coords.tile_y;
-
-    int i_center = n_sprite_x * n_sprite_y / 2;
-    int center_cache_tile_x = tile_cache[i_center]->tile_x;
-    int center_cache_tile_y = tile_cache[i_center]->tile_y;
-
-    int tile_shift_x = center_cache_tile_x - center_tile_x;
-    int tile_shift_y = center_cache_tile_y - center_tile_y;
-
-    if (abs(tile_shift_x) < n_sprite_x)
-    {
-        shiftTileCacheX(tile_cache, tile_shift_x, n_sprite_x,
-                        n_sprite_y);
-    }
-    if (abs(tile_shift_y) < n_sprite_y)
-    {
-        shiftTileCacheY(tile_cache, tile_shift_y, n_sprite_x,
-                        n_sprite_y);
-    }
-
-    Serial.printf("updateTileCache()\n");
-    Serial.printf("  idx_coords=(%d,%d), center_tile=(%d,%d), tile_shift=(%d,%d)\n", idx_coords.idx_x, idx_coords.idx_y, center_tile_x, center_tile_y, tile_shift_x, tile_shift_y);
-
-    Serial.printf("  i,zoom,tile_x[target],tile_y[target] = \n");
-    for (int i_x = 0; i_x < n_sprite_x; i_x++)
-    {
-        for (int i_y = 0; i_y < n_sprite_y; i_y++)
-        {
-            i = n_sprite_x * i_y + i_x;
-            tile_x = center_tile_x + i_x - n_sprite_x / 2;
-            tile_y = center_tile_y + i_y - n_sprite_y / 2;
-
-            Serial.printf("    tile (%d,%d,%d[%d],%d[%d]) -> ", i, zoom, tile_cache[i]->tile_x, tile_x, tile_cache[i]->tile_y, tile_y);
-
-            if (!(tile_cache[i]->zoom == zoom && tile_cache[i]->tile_x == tile_x &&
-                  tile_cache[i]->tile_y == tile_y))
-            {
-                Serial.print("changed, update required. ");
-
-                queueData.p_sprite_struct = tile_cache[i];
-                queueData.zoom = zoom;
-                queueData.tile_x = tile_x;
-                queueData.tile_y = tile_y;
-
-                if (uxQueueSpacesAvailable(update_tile_queue))
-                {
-                    if (xQueueSend(update_tile_queue, &queueData, 0) == errQUEUE_FULL)
-                    {
-                        Serial.print("faild to send a queue! The queue is full.\n");
-                    }
-                    else
-                    {
-                        Serial.print("sent a queue\n");
-                    }
-                }
-            }
-            else
-            {
-                Serial.print("no change, nothing to do.\n");
-            }
-        }
-    }
-}
-
-void pushTileCache(sprite_struct *tile_cache[], st_idx_coords &idx_coords)
-{
-    int i, offset_x, offset_y;
-
-    Serial.printf("pushTileCache() idx_coords=(%d,%d) which is tile=(%d,%d), idx_on_tile=(%d,%d)\n", idx_coords.idx_x, idx_coords.idx_y, idx_coords.idx_x / tile_size, idx_coords.idx_y / tile_size, idx_coords.idx_x % tile_size, idx_coords.idx_y % tile_size);
-
-    for (int i_y = 0; i_y < n_sprite_y; i_y++)
-    {
-        for (int i_x = 0; i_x < n_sprite_x; i_x++)
-        {
-            i = n_sprite_x * i_y + i_x;
-
-            offset_x = tile_cache[i]->tile_x * tile_size - idx_coords.idx_x + lcd.width() / 2;
-            offset_y = tile_cache[i]->tile_y * tile_size - idx_coords.idx_y + lcd.height() / 2;
-
-            Serial.printf("  i:%i, tile=(%d,%d), offset=(%d,%d)\n", i, tile_cache[i]->tile_x, tile_cache[i]->tile_y, offset_x, offset_y);
-
-            if (xSemaphoreTake(tile_cache[i]->mutex, pdMS_TO_TICKS(0)))
-            {
-
-                tile_cache[i]->sprite->pushSprite(offset_x, offset_y);
-
-                // unlock the tile
-                if (xSemaphoreGive(tile_cache[i]->mutex) != pdTRUE)
-                {
-                    Serial.printf("pushTileCache(): Error in xSemaphoreGive() i=%d, zoom=%d, tile=(%d,%d)\n", i, zoom, tile_cache[i]->tile_x, tile_cache[i]->tile_y);
-                }
-            }
-            else
-            {
-                Serial.printf("pushTileCache(): passed because the tile was locked. i=%d, zoom=%d, tile=(%d,%d)\n", i, zoom, tile_cache[i]->tile_x, tile_cache[i]->tile_y);
-            }
-        }
-    }
-}
-
-void initTileCache()
-{
-    Serial.printf("heap_caps_get_free_size(MALLOC_CAP_DMA):   %8d\n",
-                  heap_caps_get_free_size(MALLOC_CAP_DMA));
-    Serial.printf("heap_caps_get_free_size(MALLOC_CAP_SPIRAM):%8d\n",
-                  heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-
-    canvas.setPsram(true);
-    canvas.createSprite(lcd.width(), lcd.height());
-    canvas.fillSprite(NO_TILE_COLOR);
-
-    for (int i = 0; i < n_sprite; i++)
-    {
-        tile_cache[i] = (sprite_struct *)ps_malloc(sizeof(sprite_struct));
-
-        tile_cache[i]->zoom = 0;
-        tile_cache[i]->tile_x = 0;
-        tile_cache[i]->tile_y = 0;
-
-        tile_cache[i]->sprite = new LGFX_Sprite(&canvas);
-        tile_cache[i]->sprite->setPsram(true);
-        tile_cache[i]->sprite->createSprite(tile_size, tile_size);
-        tile_cache[i]->sprite->fillSprite(NO_TILE_COLOR);
-
-        tile_cache[i]->mutex = xSemaphoreCreateMutex();
-
-        // release mutex
-        xSemaphoreGive(tile_cache[i]->mutex);
-    }
-
-    Serial.println("tile_cache was allocated.");
-    Serial.printf("heap_caps_get_free_size(MALLOC_CAP_DMA):   %8d\n",
-                  heap_caps_get_free_size(MALLOC_CAP_DMA));
-    Serial.printf("heap_caps_get_free_size(MALLOC_CAP_SPIRAM):%8d\n",
-                  heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-}
-
-void pushDirIcon(double dir_degree,
-                 st_idx_coords &dir_icon_coords,
-                 st_idx_coords &display_center_idx_coords,
-                 bool is_active)
-{
-    int offset_x = dir_icon_coords.idx_x - display_center_idx_coords.idx_x + lcd.width() / 2;
-    int offset_y = dir_icon_coords.idx_y - display_center_idx_coords.idx_y + lcd.height() / 2;
+    double dir_degree = gps.course.deg();
+    int offset_x = curr_gps_idx_coords.idx_x - display_center_idx_coords.idx_x + lcd.width() / 2;
+    int offset_y = curr_gps_idx_coords.idx_y - display_center_idx_coords.idx_y + lcd.height() / 2;
 
     // When dir icon is out of canvas
     if (!((-DIR_ICON_R < offset_x && offset_x < lcd.width() + DIR_ICON_R) &&
           (-DIR_ICON_R < offset_y && offset_y < lcd.height() + DIR_ICON_R)))
     {
-        Serial.printf(
-            "Direction icon is out of canvas. offset=(%d,%d)\n", offset_x, offset_y);
+        if (VERBOSE)
+        {
+            Serial.printf("pushDirIcon(): out of canvas offset=(%d,%d)\n", offset_x, offset_y);
+        }
+
         return;
     }
 
-    uint16_t dir_icon_color = is_active ? DIR_ICON_COLOR_ACTIVE : DIR_ICON_COLOR_INACTIVE;
+    if (is_gps_active)
+    {
+        dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_ACTIVE);
+    }
+    else
+    {
+        dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_INACTIVE);
+    }
 
-    dir_icon.fillSprite(DIR_ICON_TRANS_COLOR);
-    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R, dir_icon_color);
-    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R - DIR_ICON_WIDTH,
-                        DIR_ICON_BG_COLOR);
-
-    int x0 = DIR_ICON_R;
-    int y0 = DIR_ICON_WIDTH;
-    int x1 = DIR_ICON_R + (DIR_ICON_R - DIR_ICON_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
-    int y1 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
-    int x2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
-    int y2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
-
-    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_color);
-
-    x0 = DIR_ICON_R;
-    y0 = (int)(DIR_ICON_R * 1.2);
-    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, DIR_ICON_BG_COLOR);
-
-    dir_icon.setPivot(DIR_ICON_R, DIR_ICON_R); // set center of rotation
     dir_icon.pushRotateZoomWithAA(offset_x, offset_y, dir_degree, 1, 1,
-                                  DIR_ICON_TRANS_COLOR);
-}
-
-void initDirIcon()
-{
-    Serial.println("Initializing direction icon");
-    dir_icon.createSprite(DIR_ICON_R * 2 + 1, DIR_ICON_R * 2 + 1);
+                                  dir_icon_palette_id_trans);
 }
 
 void pushButtonLabels()
 {
     int h = 8;
+    int pad = 1;
 
-    canvas.setCursor(0, canvas.height() - h + 1);
+    canvas.setCursor(0, canvas.height() - h + pad);
     canvas.setTextSize(1);
     canvas.setTextColor(WHITE, BLACK);
 
-    canvas.setCursor(15, canvas.height() - h + 1);
+    canvas.setCursor(15, canvas.height() - h + pad);
     canvas.print(" Brightness ");
 
-    canvas.setCursor(142, canvas.height() - h + 1);
+    canvas.setCursor(142, canvas.height() - h + pad);
     canvas.print(" Zoom ");
 
     if (!centering_mode)
     {
-        canvas.setCursor(241, canvas.height() - h + 1);
+        canvas.setCursor(241, canvas.height() - h + pad);
         canvas.print(" Center ");
-    }
-}
-
-void initUpdatingIcon()
-{
-    Serial.println("Initializing updating icon");
-
-    double r1 = UPDATING_ICON_WIDTH * 0.5 * 0.9;
-    double r2 = UPDATING_ICON_WIDTH * 0.5 * 0.4;
-    int line_stroke = 2;
-    uint8_t color, color1 = 32, color2 = 255;
-    int x1, y1, x2, y2;
-
-    updating_icon.createSprite(UPDATING_ICON_WIDTH, UPDATING_ICON_WIDTH);
-    updating_icon.fillSprite(TFT_BLACK);
-
-    for (int i = 0; i < updating_icon_n_line; i++)
-    {
-        x1 = UPDATING_ICON_WIDTH / 2 + r1 * cos((double)i / updating_icon_n_line * 2 * M_PI);
-        y1 = UPDATING_ICON_WIDTH / 2 + r1 * sin((double)i / updating_icon_n_line * 2 * M_PI);
-        x2 = UPDATING_ICON_WIDTH / 2 + r2 * cos((double)i / updating_icon_n_line * 2 * M_PI);
-        y2 = UPDATING_ICON_WIDTH / 2 + r2 * sin((double)i / updating_icon_n_line * 2 * M_PI);
-        color = color1 + i * (double)(color2 - color1) / updating_icon_n_line;
-
-        drawLineWithStroke(&updating_icon, x1, y1, x2, y2, line_stroke, lcd.color565(color, color, color));
     }
 }
 
 void initGPSIcon()
 {
-    Serial.println("Initializing GPS icon");
-    gps_icon.setPsram(true);
+    Serial.printf("initGPSIcon(): Initializing GPS icon\n");
+    gps_icon.setPsram(false);
     gps_icon.createSprite(satellite_icon_png_width, satellite_icon_png_height);
-    gps_icon.fillSprite(WHITE);
+    gps_icon.fillSprite(TFT_WHITE);
     gps_icon.drawPng((std::uint8_t *)satellite_icon_png, satellite_icon_png_len, 0, 0);
 }
 
@@ -913,13 +1079,15 @@ void pushInfoTopRight()
     // [Memo] 12 x 18 = Character size in case of `canvas.setTextSize(2);`.
     // The variable w is calculated from right to left.
     int pad = 1;
-    int w = pad + 12 * 5 + pad + 16 + pad + 16 + pad;
+    int clock_width = 12 * 5; // 5 characters
+    int gps_icon_width = satellite_icon_png_width;
+    int w = pad + gps_icon_width + pad + clock_width + pad;
     int h = pad + 16 + pad;
 
     canvas.fillRect(lcd.width() - w, 0, w, h, TFT_BLACK);
 
     // Show clock
-    canvas.setCursor(lcd.width() - (pad + 12 * 5), pad);
+    canvas.setCursor(lcd.width() - (pad + clock_width), pad);
     canvas.setTextSize(2);
     canvas.setTextColor(WHITE, BLACK);
     canvas.printf("%02d:%02d", (gps.time.hour() + 9) % 24, gps.time.minute());
@@ -927,25 +1095,7 @@ void pushInfoTopRight()
     // GPS state
     if (is_gps_active)
     {
-        gps_icon.pushSprite(lcd.width() - (pad + 12 * 5 + pad + 16), pad, TFT_BLACK);
-    }
-
-    // Tile cache updating state
-    if ((int)uxQueueSpacesAvailable(update_tile_queue) < n_sprite)
-    {
-        // if queue is not empty
-        int offset_x = lcd.width() - (pad + 12 * 5 + pad + 16 + pad + UPDATING_ICON_WIDTH / 2);
-        int offset_y = pad + UPDATING_ICON_WIDTH / 2;
-
-        // set center of rotation
-        updating_icon.setPivot(UPDATING_ICON_WIDTH / 2, UPDATING_ICON_WIDTH / 2);
-        updating_icon.pushRotateZoomWithAA(offset_x, offset_y, i_shift_updating_icon * 360.0 / updating_icon_n_line, 1, 1,
-                                           DIR_ICON_TRANS_COLOR);
-        i_shift_updating_icon++;
-    }
-    else
-    {
-        i_shift_updating_icon = 0;
+        gps_icon.pushSprite(lcd.width() - (gps_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
     }
 }
 
@@ -954,9 +1104,9 @@ void pushInfoTopLeft()
     // Character size
     // size 1: w6,  h8
     // size 2: w12, h16
-    int pad = 1;
-    int w = pad + 12 * 5 + pad + 6 * 4 + pad;
-    int h = pad + 16 + pad;
+    const int pad = 1;
+    const int w = pad + 12 * 5 + pad + 6 * 4 + pad;
+    const int h = pad + 16 + pad;
 
     canvas.fillRect(0, 0, w, h, TFT_BLACK);
 
@@ -972,11 +1122,11 @@ void pushInfoTopLeft()
     canvas.print("km/h");
 }
 
-void drawCanvas(sprite_struct *tile_cache[], st_idx_coords &display_center_idx_coords)
+void drawCanvas()
 {
-    canvas.fillSprite(NO_TILE_COLOR);
-    pushTileCache(tile_cache, display_center_idx_coords);
-    pushDirIcon(gps.course.deg(), curr_gps_idx_coords, display_center_idx_coords, is_gps_active);
+    canvas.fillSprite(NO_CACHE_COLOR);
+    pushTileCache();
+    pushDirIcon();
     pushInfoTopRight();
     pushInfoTopLeft();
     pushButtonLabels();
@@ -984,89 +1134,20 @@ void drawCanvas(sprite_struct *tile_cache[], st_idx_coords &display_center_idx_c
 }
 
 // ================================================================================
-// Async tile loading
-// ================================================================================
-void initUpdateTileQueue()
-{
-    update_tile_queue = xQueueCreate(LEN_QUEUE, sizeof(st_updateTileQueueData));
-
-    if (update_tile_queue == NULL)
-    {
-        Serial.println("Failed in initializing update_tile_queue!");
-    }
-    else
-    {
-        Serial.println("update_tile_queue was initialized.");
-    }
-}
-
-void updateTileTask(void *arg)
-{
-    QueueHandle_t xQueue;
-    BaseType_t xStatus;
-    st_updateTileQueueData queueData;
-    sprite_struct *p_sprite_struct;
-    int zoom, tile_x, tile_y;
-    const TickType_t xTicksToWait = 50U; // about 100ms
-
-    while (1)
-    {
-        // loop in xTicksToWait and
-        // when data is received, this func is triggerred
-        xStatus = xQueueReceive(update_tile_queue, &queueData, xTicksToWait);
-
-        if (xStatus == pdPASS) // successful receiving
-        {
-            p_sprite_struct = queueData.p_sprite_struct;
-            zoom = queueData.zoom;
-            tile_x = queueData.tile_x;
-            tile_y = queueData.tile_y;
-
-            if (zoom == p_sprite_struct->zoom && tile_x == p_sprite_struct->tile_x && tile_y == p_sprite_struct->tile_y)
-            {
-                Serial.printf("updateTileTask(): queue was skipped because the target tile was already up-to-date. p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
-            }
-            else
-            {
-                // lock the tile
-                if (xSemaphoreTake(p_sprite_struct->mutex, (TickType_t)0))
-                {
-                    // We now have the semaphore and can access the shared resource.
-                    loadTile(p_sprite_struct->sprite, zoom, tile_x, tile_y);
-                    loadRoute(p_sprite_struct->sprite, zoom, tile_x, tile_y);
-                    loadPoint(p_sprite_struct->sprite, zoom, tile_x, tile_y);
-
-                    p_sprite_struct->zoom = zoom;
-                    p_sprite_struct->tile_x = tile_x;
-                    p_sprite_struct->tile_y = tile_y;
-
-                    // unlock the tile
-                    if (xSemaphoreGive(p_sprite_struct->mutex) != pdTRUE)
-                    {
-                        Serial.printf("updateTileTask(): Error in xSemaphoreGive() p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
-                    }
-                }
-                else
-                {
-                    Serial.printf("updateTileTask(): queue was passed because the tile was locked. p_sprite_struct=%d, z=%d, tile_x=%d, tile_y=%d\n", p_sprite_struct, zoom, tile_x, tile_y);
-                }
-            }
-        }
-
-        delay(50);
-    }
-}
-
-// ================================================================================
 // Zoom level
 // ================================================================================
 int compIntR(const void *a, const void *b) { return *(int *)a < *(int *)b; }
 
-void initZoomList(const char *map_dir_path)
+void initZoomList()
 {
+    if (VERBOSE)
+    {
+        Serial.println("initZoomList():");
+    }
+
     for (int j = 0; j < LEN_ZOOM_LIST; j++)
     {
-        zoom_list[j] = -1;
+        zoom.list[j] = -1;
     }
 
     int i = 0;
@@ -1089,62 +1170,83 @@ void initZoomList(const char *map_dir_path)
             num = String(filename).toInt();
             if (String(filename) == String(num))
             {
-                zoom_list[i] = num;
-                n_zoom = i + 1;
+                zoom.list[i] = num;
+                zoom.n = i + 1;
                 i++;
             }
-            Serial.printf("%s\n", filename);
+
+            if (VERBOSE)
+            {
+
+                Serial.printf("  %s\n", filename);
+            }
 
             entry.close();
         }
     }
     map_dir.close();
-    Serial.printf("n_zoom: %d\n", n_zoom);
 
-    qsort(zoom_list, n_zoom, sizeof(int), compIntR);
+    qsort(zoom.list, zoom.n, sizeof(int), compIntR);
 
-    Serial.print("Zoom levels of stored map: ");
-    for (int j = 0; j < LEN_ZOOM_LIST; j++)
+    if (VERBOSE)
     {
-        Serial.printf("%d ", zoom_list[j]);
-    }
-    Serial.println("");
+        Serial.printf("  zoom.n: %d\n", zoom.n);
+        Serial.printf("  zoom.list: ");
 
-    zoom = zoom_list[zoom_list_i];
+        for (int j = 0; j < LEN_ZOOM_LIST; j++)
+        {
+            Serial.printf("%d ", zoom.list[j]);
+        }
+        Serial.println("");
+    }
+
+    int initial_zoom = zoom.list[LEN_ZOOM_LIST - 1];
+    display_center_idx_coords.zoom = initial_zoom;
+    curr_gps_idx_coords.zoom = initial_zoom;
+}
+
+int zoom_level()
+{
+    return zoom.list[zoom.i];
+}
+
+void increment_zoom_level()
+{
+    zoom.i = (zoom.i + 1) % zoom.n;
 }
 
 void changeZoomLevel()
 {
-    int zoom_prev = zoom;
-    zoom_list_i++;
+    int zoom_old = zoom.list[zoom.i];
+    increment_zoom_level();
 
-    if (zoom_list_i >= n_zoom)
+    if (VERBOSE)
     {
-        zoom_list_i = 0;
+        Serial.printf("changeZoomLevel(): %d->%d, ", zoom_old, zoom_level());
     }
 
-    zoom = zoom_list[zoom_list_i];
+    st_idx_coords idx_coords_new;
+    idx_coords_new.zoom = zoom_level();
 
-    Serial.printf("Zoom level changed from %d to %d. ", zoom_prev, zoom);
-    Serial.printf("display_center_idx_coords (%d,%d) -> ", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
+    convIdxCoordsForZoom(display_center_idx_coords, idx_coords_new);
 
-    // Update curr_gps_idx_coords for the new zoom level
-    if (gps.location.isValid())
+    if (VERBOSE)
     {
-        calcCoords2CoordsIdx(curr_gps_idx_coords, gps.location.lng(),
-                             gps.location.lat(), zoom, tile_size);
+        Serial.printf("display_center_idx_coords (%d,%d)->", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
+        Serial.printf("(%d,%d)\n", idx_coords_new.idx_x, idx_coords_new.idx_y);
+    }
+
+    display_center_idx_coords = idx_coords_new;
+
+    if (centering_mode)
+    {
+        curr_gps_idx_coords = display_center_idx_coords;
     }
     else
     {
-        curr_gps_idx_coords.idx_x = (int)(curr_gps_idx_coords.idx_x * pow(2.0, (double)(zoom - zoom_prev)));
-        curr_gps_idx_coords.idx_y = (int)(curr_gps_idx_coords.idx_y * pow(2.0, (double)(zoom - zoom_prev)));
+        convIdxCoordsForZoom(curr_gps_idx_coords, idx_coords_new);
+        curr_gps_idx_coords = idx_coords_new;
     }
-
-    // Update display_center_idx_coords for the new zoom level
-    display_center_idx_coords.idx_x = (int)(display_center_idx_coords.idx_x * pow(2.0, (double)(zoom - zoom_prev)));
-    display_center_idx_coords.idx_y = (int)(display_center_idx_coords.idx_y * pow(2.0, (double)(zoom - zoom_prev)));
-
-    Serial.printf("(%d,%d)\n", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
 }
 
 // ================================================================================
@@ -1157,13 +1259,13 @@ bool checkIfUseSound()
     if (file.open("/useSound", O_RDONLY))
     {
         ret = true;
-        Serial.println("checkIfUseSound(): useSound=true");
-    }
-    else
-    {
-        Serial.println("checkIfUseSound(): useSound=false");
     }
     file.close();
+
+    if (VERBOSE)
+    {
+        Serial.printf("checkIfUseSound(): useSound=%d\n", (int)ret);
+    }
 
     return ret;
 }
@@ -1244,9 +1346,9 @@ void playGPSInactive()
     writeSound2Speaker(gps_inactive_raw, gps_inactive_raw_len);
 }
 
-// ========================================
+// ================================================================================
 // Button
-// ========================================
+// ================================================================================
 void vibrate(int t_ms)
 {
     M5.Axp.SetLDOEnable(3, true);
@@ -1256,54 +1358,83 @@ void vibrate(int t_ms)
 
 void centeringHandler(Event &e)
 {
-    // recover to centering mode
-    Serial.printf("centeringHandler()\n");
-    centering_mode = true;
-    display_center_idx_coords = curr_gps_idx_coords;
+    /*
+     * Recover to centering mode
+     */
+    if (VERBOSE)
+    {
+        Serial.printf("centeringHandler() is called.\n");
+    }
 
-    updateTileCache(tile_cache, zoom, display_center_idx_coords, n_sprite_x,
-                    n_sprite_y);
-    drawCanvas(tile_cache, display_center_idx_coords);
+    centering_mode = true;
+    display_center_idx_coords.idx_x = curr_gps_idx_coords.idx_x;
+    display_center_idx_coords.idx_y = curr_gps_idx_coords.idx_y;
+
+    updateTileCache();
+    drawCanvas();
 }
 
 void zoomHandler(Event &e)
 {
-    // change zoom level
-    Serial.printf("zoomHandler()\n");
+    /*
+     * Change zoom level
+     */
+    if (VERBOSE)
+    {
+        Serial.printf("zoomHandler() is called.\n");
+    }
+
     changeZoomLevel();
 
-    updateTileCache(tile_cache, zoom, display_center_idx_coords, n_sprite_x,
-                    n_sprite_y);
-    drawCanvas(tile_cache, display_center_idx_coords);
+    updateTileCache();
+    drawCanvas();
 }
 
 void moveHandler(Event &e)
 {
-    // scroll tile
+    /*
+     * Scroll tile
+     */
     centering_mode = false;
 
-    Serial.printf("moveHandler() from (%d,%d) to (%d,%d); display_center_idx_coords:%d,%d\n", e.from.x, e.from.y, e.to.x, e.to.y, display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
-    display_center_idx_coords.idx_x -= e.to.x - e.from.x;
-    display_center_idx_coords.idx_y -= e.to.y - e.from.y;
+    int diff_x = e.to.x - e.from.x;
+    int diff_y = e.to.y - e.from.y;
 
-    drawCanvas(tile_cache, display_center_idx_coords);
-}
+    display_center_idx_coords.idx_x -= diff_x;
+    display_center_idx_coords.idx_y -= diff_y;
 
-void wasReleasedHandler(Event &e)
-{
-    // update tileCache
-    Serial.println("wasReleasedHandler()");
-    updateTileCache(tile_cache, zoom, display_center_idx_coords, n_sprite_x,
-                    n_sprite_y);
-    drawCanvas(tile_cache, display_center_idx_coords);
+    drawCanvas();
+
+    if (VERBOSE)
+    {
+        Serial.printf("moveHandler(): display_center_idx_coords (x=%d,y=%d)", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
+        Serial.printf("  diff (x=%d,y=%d)\n", diff_x, diff_y);
+    }
 }
 
 void toggleBrightnessHandler(Event &e)
 {
-    Serial.println("toggleBrightnessHandler()");
+    if (VERBOSE)
+    {
+        Serial.printf("toggleBrightnessHandler(): %d", brightness_list[i_brightness]);
+    }
+
     i_brightness = (i_brightness + 1) % n_brightness;
     lcd.setBrightness(brightness_list[i_brightness]);
-    Serial.printf("toggleBrightnessHandler()  set to %d", brightness_list[i_brightness]);
+
+    if (VERBOSE)
+    {
+        Serial.printf("->%d", brightness_list[i_brightness]);
+    }
+}
+
+void smartTileLoadingHandler(Event &e)
+{
+    if (VERBOSE)
+    {
+        Serial.printf("smartTileLoadingHandler() is called.\n");
+    }
+    smartTileLoading();
 }
 
 void setupButtonHandlers()
@@ -1311,36 +1442,10 @@ void setupButtonHandlers()
     M5.background.delHandlers();
 
     M5.background.addHandler(moveHandler, E_MOVE);
-    // M5.background.addHandler(wasReleasedHandler, E_RELEASE);
+    M5.background.addHandler(smartTileLoadingHandler, E_RELEASE);
     M5.BtnA.addHandler(toggleBrightnessHandler, E_RELEASE);
     M5.BtnB.addHandler(zoomHandler, E_RELEASE);
     M5.BtnC.addHandler(centeringHandler, E_RELEASE);
-}
-
-void initMapVariables()
-{
-    if (file.open("/initPoint", O_RDONLY))
-    {
-        Serial.println("initMapVariables(): initPoint file was detected.");
-
-        zoom = read4BytesAsInt(file);
-        curr_gps_idx_coords.idx_x = read4BytesAsInt(file);
-        curr_gps_idx_coords.idx_y = read4BytesAsInt(file);
-    }
-    else
-    {
-        Serial.println("initMapVariables(): initPoint file was not detected.");
-        Serial.println("initMapVariables(): Default point was loaded.");
-
-        zoom = z_init;
-        curr_gps_idx_coords.idx_x = idx_coords_x_init;
-        curr_gps_idx_coords.idx_y = idx_coords_y_init;
-    }
-    file.close();
-
-    Serial.printf("initMapVariables(): zoom:%d, curr_gps_idx_coords idx_x:%d, idx_y:%d\n", zoom, curr_gps_idx_coords.idx_x, curr_gps_idx_coords.idx_y);
-
-    display_center_idx_coords = curr_gps_idx_coords;
 }
 
 // ========================================
@@ -1361,7 +1466,7 @@ void setup(void)
     lcd.println("Initializing");
 
     // Serial connection for debug
-    Serial.println("Initializing");
+    Serial.println("Initializing cycle_navi");
 
     // Serial connection to GPS module
     Serial2.begin(9600, SERIAL_8N1, 13, 14);
@@ -1375,31 +1480,28 @@ void setup(void)
     // Initializing sound
     use_sound = checkIfUseSound();
     if (use_sound)
+    {
         playBoot();
+    }
 
     // Initialize zoom_list
-    initZoomList(map_dir_path);
-
-    // Initialize sprites for image cache
-    initTileCache();
-
-    // Initializing button handlers
-    setupButtonHandlers();
+    initZoomList();
 
     // Initializing small parts
     initGPSIcon();
     initDirIcon();
-    initUpdatingIcon();
+    // initUpdatingIcon();
 
-    // Initialize queue and task
-    initUpdateTileQueue();
-    xTaskCreatePinnedToCore(updateTileTask, "updateTileTask", 8192, &update_tile_queue, 1, NULL, 0);
+    // Initializing button handlers
+    setupButtonHandlers();
 
     // Set initial map variables (The tokyo station)
     initMapVariables();
 
-    updateTileCache(tile_cache, zoom, display_center_idx_coords, n_sprite_x,
-                    n_sprite_y, false);
+    // Initialize sprites for image cache
+    initCanvas();
+    initTileCache();
+    updateTileCache();
 
     Serial.println("Waiting GPS signals...");
     t_prev = millis();
@@ -1407,67 +1509,13 @@ void setup(void)
 
 void loop()
 {
-    if (gps.location.isValid())
-    {
-        bool isUpdated = gps.location.isUpdated();
+    checkGPS();
 
-        if (isUpdated != isUpdatedPrev)
-        {
-            gps_count = 0;
-        }
-        isUpdatedPrev = isUpdated;
+    updateTileCache();
+    drawCanvas();
+    smartTileLoading();
 
-        if (isUpdated)
-        {
-            Serial.println("loop(): GPS is available.");
-
-            if (!is_gps_active && gps_count == gps_count_th)
-            {
-                is_gps_active = true;
-
-                if (use_sound)
-                {
-                    playGPSActive();
-                    Serial.println("loop(): playGPSActive() was invoked.");
-                }
-            }
-        }
-        else
-        {
-            Serial.println("loop()  GPS is unavailable.");
-
-            if (is_gps_active && gps_count == gps_count_th)
-            {
-                is_gps_active = false;
-
-                if (use_sound)
-                {
-                    playGPSInactive();
-                    Serial.println("loop(): playGPSInactive() was invoked.");
-                }
-            }
-        }
-        gps_count++;
-
-        // Update curr_gps_idx_coords with gps data
-        calcCoords2CoordsIdx(curr_gps_idx_coords, gps.location.lng(),
-                             gps.location.lat(), zoom, tile_size);
-
-        if (centering_mode)
-            display_center_idx_coords = curr_gps_idx_coords;
-
-        Serial.printf("loop()\n");
-        Serial.printf("  gps=(%f, %f), satellites=%d ", gps.location.lng(), gps.location.lat(), gps.satellites.value());
-        Serial.printf("curr_gps_idx_coords=(%d,%d) ", curr_gps_idx_coords.idx_x, curr_gps_idx_coords.idx_y);
-        Serial.printf("display_center_idx_coords=(%d,%d)", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
-        Serial.println();
-    }
-
-    updateTileCache(tile_cache, zoom, display_center_idx_coords, n_sprite_x,
-                    n_sprite_y);
-    drawCanvas(tile_cache, display_center_idx_coords);
-
-    do
+    do // Smart delay
     {
         // Update button & touch screen
         M5.update();
