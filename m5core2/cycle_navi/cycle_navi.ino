@@ -47,7 +47,7 @@
 
 // Settings
 const unsigned long interval_sec = 1;
-const unsigned long bt_discover_interval_sec = 30;
+const unsigned long bt_discover_interval_sec = 20;
 const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
 const char route_dir_path[] = "/route_dat";
