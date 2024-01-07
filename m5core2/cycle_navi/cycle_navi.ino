@@ -40,7 +40,7 @@
 // ================================================================================
 // Common
 #define CYCLE_NAVI_VERSION 100
-#define CYCLE_NAVI_VERSION_STRING "1.0"
+#define CYCLE_NAVI_VERSION_STRING "2.0"
 #define SUCCESS 1
 #define ERROR 0
 #define VERBOSE 1 // Set non-zero for verbose log mode
