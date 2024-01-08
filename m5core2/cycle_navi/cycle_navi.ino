@@ -570,7 +570,7 @@ void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
             t = millis();
         }
 
-        sprite->drawJpgFile(sd, &file);
+        sprite->drawJpgFile(sd, file_path);
 
         if (VERBOSE)
         {
