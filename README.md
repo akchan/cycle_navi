@@ -49,7 +49,7 @@ Install the required packages below via Arduino library manager before compile a
 - M5Stack Core2 board library (2.0.8)
 - TinyGPSPlus (1.0.3)
 - SdFat (2.2.2)
-- LovyanGFX (1.0.9)
+- LovyanGFX (1.1.12)
 
 # Usage
 
