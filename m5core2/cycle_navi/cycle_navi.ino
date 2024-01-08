@@ -19,7 +19,7 @@
  * 描画プロセスの再検討。指離してから読み込みするようにする。
  */
 
-#include <SdFat.h> // Define SdFat.h before LovyanGFX.hpp
+#include <SdFat.h>       // Define SdFat.h before LovyanGFX.hpp
 #include <M5Core2.h>
 #include <TinyGPSPlus.h> // Installed through arduino IDE library manager
 #include <math.h>
@@ -39,8 +39,8 @@
 // Variables declaration
 // ================================================================================
 // Common
-#define CYCLE_NAVI_VERSION 100
-#define CYCLE_NAVI_VERSION_STRING "2.0"
+#define CYCLE_NAVI_VERSION 201
+#define CYCLE_NAVI_VERSION_STRING "2.1"
 #define SUCCESS 1
 #define ERROR 0
 #define VERBOSE 1 // Set non-zero for verbose log mode
@@ -63,7 +63,7 @@ const int gps_count_th = 3;
 bool isUpdatedPrev = false;
 int gps_active_counter = 0;
 const unsigned long bt_discover_interval_ms = 1000 * bt_discover_interval_sec;
-unsigned long bt_last_discover_ms = 0;
+unsigned long bt_last_discover_ms = -1 * 1000 * bt_discover_interval_sec;
 
 struct st_tile_coords
 {
