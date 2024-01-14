@@ -1,6 +1,11 @@
 # cycle_navi
 
-M5Stack Core2を使ったサイクリング用GPSナビのコードです。
+M5Stack Core2を使ったお手軽サイクリング用GPSナビのコードです。
+
+GPSモジュールは不要で、簡単に試していただけます。
+
+BluetoothでGPS情報をandroidスマートフォンやGPSレシーバなどの外部端末から受信することで
+内部にGPSモジュールやアンテナが必要ありません。
 
 Simple GPS navigation system using M5Stack Core2
 
