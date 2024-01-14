@@ -26,9 +26,10 @@ Simple GPS navigation system using M5Stack Core2
 - SD card (TF card)
     - formatted as exFAT with small allocation unit size (ex. 2048 byte/block)
     - If you use mac, use `newfs_exfat -b 2048 {device}` command instead of `Disk utility.app` which can't specify the allocation unit size.
-- GPS receiver
-    - sould be compatible with bluetooth SSP
-    - You can use your android phones via this App (GNSS2bluetooth) developed for this project.
+- Android phone or GPS receiver
+    - Source of GPS information
+    - This project reads the GPS NMEA message via bluetooth (SPP, serial port profile)
+    - You can use your android phones as a gps receiver via this App (GNSS2bluetooth) developed for this project.
         - [https://github.com/akchan/cycle_navi/releases/tag/gnss2bluetooth](https://github.com/akchan/cycle_navi/releases/tag/gnss2bluetooth)
 
 ### Recommended
