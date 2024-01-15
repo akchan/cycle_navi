@@ -25,7 +25,7 @@ import requests
 from PIL import Image
 from tqdm import tqdm
 
-from gsij_alt_tile import GsijAltTile
+from gsij_alt_tile import GsiStandardTile
 
 
 TILE_SIZE = 256
@@ -351,8 +351,8 @@ def conv_route_coords_to_tile_idx_list(zoom, coords,
 
     # Convert (lon, lat) to (tile_x, tile_y, idx_x, idx_y)
     for lon, lat in coords:
-        _, tile_x, tile_y = GsijAltTile.calc_coords2tile_coords(zoom, lon, lat)
-        idx_x, idx_y = GsijAltTile.calc_tile_idx(zoom, lon, lat, tile_size)
+        _, tile_x, tile_y = GsiStandardTile.calc_lonlat2tile_coords(lon, lat, zoom, )
+        idx_x, idx_y = GsiStandardTile.calc_idx_on_tile(lon, lat, zoom, tile_size)
 
         tile_idx_tmp = [tile_x, tile_y, idx_x, idx_y]
 
@@ -430,8 +430,8 @@ def conv_point_coords_to_tile_idx_list(zoom, point_coords, tile_size, point_dat_
 
     for lon, lat in point_coords:
 
-        _, x_tile, y_tile = GsijAltTile.calc_coords2tile_coords(zoom, lon, lat)
-        x_idx, y_idx = GsijAltTile.calc_tile_idx(zoom, lon, lat, tile_size)
+        _, x_tile, y_tile = GsiStandardTile.calc_lonlat2tile_coords(lon, lat, zoom)
+        x_idx, y_idx = GsiStandardTile.calc_idx_on_tile(lon, lat, zoom, tile_size)
 
         tile_idx_list.append([zoom, x_tile, y_tile, x_idx, y_idx])
 
@@ -516,7 +516,6 @@ def list_map_tile_to_collect(target_zoom_level,
 
 
 def get_map_tile(zoom, tile_x, tile_y,
-                 gsij_obj=None,
                  base_url="https://cyberjapandata.gsi.go.jp/xyz/std/",
                  request_interval=REQUEST_INTERVAL,
                  cache_dir="gsij_map_tile_cache",
@@ -566,15 +565,13 @@ def get_map_tile(zoom, tile_x, tile_y,
 
 
 def collect_map_tile(map_dir_path, map_tile_to_collect, jpg_quality=75, verbose=False):
-    gsij_obj = GsijAltTile(cache_dir="gsij_map_tile_cache")
-
     if verbose:
         map_tile_to_collect = tqdm(map_tile_to_collect)
 
     for zoom, tile_x, tile_y in map_tile_to_collect:
         file_path = os.path.join(map_dir_path, "{}/{}/{}.jpg".format(zoom, tile_x, tile_y))
 
-        jpg_path = get_map_tile(zoom, tile_x, tile_y, gsij_obj)
+        jpg_path = get_map_tile(zoom, tile_x, tile_y)
 
         if jpg_path is None:
             continue
