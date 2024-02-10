@@ -19,7 +19,7 @@
  * 描画プロセスの再検討。指離してから読み込みするようにする。
  */
 
-#include <SdFat.h>       // Define SdFat.h before LovyanGFX.hpp
+#include <SdFat.h> // Define SdFat.h before LovyanGFX.hpp
 #include <M5Core2.h>
 #include <TinyGPSPlus.h> // Installed through arduino IDE library manager
 #include <math.h>
@@ -708,10 +708,6 @@ void updateTileCache()
 {
     /*
      * Update tile_cache based on display_center_idx_coords
-     *
-     * Return:
-     *
-     * If any tiles updated (or shifted), true will be returned.
      */
     const int i_center_sprite = n_sprite / 2;
     int tile_shift_x = 0;
@@ -795,7 +791,7 @@ void pushTileCache()
 // ================================================================================
 // Smart tile loading
 // ================================================================================
-void smartTileLoading(const bool draw_canvas = true)
+void smartTileLoading(const bool draw_canvas = false)
 {
     int j;
     int tile_zoom, tile_x, tile_y;
@@ -859,6 +855,7 @@ void smartTileLoading(const bool draw_canvas = true)
         }
     }
 }
+
 // ================================================================================
 // MapTile
 // ================================================================================
@@ -1082,197 +1079,6 @@ void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
     }
 }
 
-void initDirIcon()
-{
-    /*
-     * dir_icon color palette:
-     *   0: DIR_ICON_TRANS_COLOR
-     *   1: DIR_ICON_BG_COLOR
-     *   2: foreground color (DIR_ICON_COLOD_ACTIVE or DIR_ICON_COLOR_INACTIVE)
-     *   3: not used (default is TFT_WHITE)
-     */
-    if (VERBOSE)
-    {
-        Serial.printf("initDirIcon(): Initializing direction icon\n");
-    }
-
-    // Allocate sprite
-    dir_icon.setColorDepth(2);
-    gps_icon.setPsram(false);
-    dir_icon.createSprite(DIR_ICON_R * 2 + 1, DIR_ICON_R * 2 + 1);
-
-    // Set palette colors
-    dir_icon.setPaletteColor(dir_icon_palette_id_trans, DIR_ICON_TRANS_COLOR);
-    dir_icon.setPaletteColor(dir_icon_palette_id_bg, DIR_ICON_BG_COLOR);
-    dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_INACTIVE);
-
-    // Draw icon
-    dir_icon.fillSprite(dir_icon_palette_id_trans); // translucent background
-    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R, dir_icon_palette_id_fg);
-    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R - DIR_ICON_EDGE_WIDTH,
-                        dir_icon_palette_id_bg);
-
-    int x0 = DIR_ICON_R;
-    int y0 = DIR_ICON_EDGE_WIDTH;
-    int x1 = DIR_ICON_R + (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
-    int y1 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
-    int x2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
-    int y2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
-
-    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_palette_id_fg);
-
-    x0 = DIR_ICON_R;
-    y0 = (int)(DIR_ICON_R * 1.2);
-    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_palette_id_bg);
-
-    // set center of rotation
-    dir_icon.setPivot(DIR_ICON_R, DIR_ICON_R);
-}
-
-void pushDirIcon()
-{
-    double dir_degree = gps.course.deg();
-    int offset_x = curr_gps_idx_coords.idx_x - display_center_idx_coords.idx_x + lcd.width() / 2;
-    int offset_y = curr_gps_idx_coords.idx_y - display_center_idx_coords.idx_y + lcd.height() / 2;
-
-    // When dir icon is out of canvas
-    if (!((-DIR_ICON_R < offset_x && offset_x < lcd.width() + DIR_ICON_R) &&
-          (-DIR_ICON_R < offset_y && offset_y < lcd.height() + DIR_ICON_R)))
-    {
-        if (VERBOSE)
-        {
-            Serial.printf("pushDirIcon(): out of canvas offset=(%d,%d)\n", offset_x, offset_y);
-        }
-
-        return;
-    }
-
-    if (is_gps_active)
-    {
-        dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_ACTIVE);
-    }
-    else
-    {
-        dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_INACTIVE);
-    }
-
-    dir_icon.pushRotateZoomWithAA(offset_x, offset_y, dir_degree, 1, 1,
-                                  dir_icon_palette_id_trans);
-}
-
-void pushButtonLabels()
-{
-    int h = 8;
-    int pad = 1;
-
-    canvas.setCursor(0, canvas.height() - h + pad);
-    canvas.setTextSize(1);
-    canvas.setTextColor(WHITE, BLACK);
-
-    canvas.setCursor(15, canvas.height() - h + pad);
-    canvas.print(" Brightness ");
-
-    canvas.setCursor(142, canvas.height() - h + pad);
-    canvas.print(" Zoom ");
-
-    if (!centering_mode)
-    {
-        canvas.setCursor(241, canvas.height() - h + pad);
-        canvas.print(" Center ");
-    }
-}
-
-void initGPSIcon()
-{
-    Serial.printf("initGPSIcon(): Initializing GPS icon\n");
-    gps_icon.setPsram(false);
-    gps_icon.createSprite(satellite_icon_png_width, satellite_icon_png_height);
-    gps_icon.fillSprite(TFT_WHITE);
-    gps_icon.drawPng((std::uint8_t *)satellite_icon_png, satellite_icon_png_len, 0, 0);
-}
-
-void initBTIcon()
-{
-    Serial.printf("initBTIcon(): Initializing Bluetooth icon\n");
-    bt_icon.setPsram(false);
-    bt_icon.createSprite(bluetooth_icon_png_width, bluetooth_icon_png_height);
-    bt_icon.fillSprite(TFT_WHITE);
-    bt_icon.drawPng((std::uint8_t *)bluetooth_icon_png, bluetooth_icon_png_len, 0, 0);
-}
-
-void pushInfoTopRight()
-{
-    // [Memo] 12 x 18 = Character size in case of `canvas.setTextSize(2);`.
-    // The variable w is calculated from right to left.
-    const int pad = 1;
-    const int clock_width = 12 * 5; // 5 characters
-    const int gps_icon_width = satellite_icon_png_width;
-    const int bt_icon_width = bluetooth_icon_png_width;
-    const int w = pad + gps_icon_width + pad + bt_icon_width + clock_width + pad;
-    const int h = pad + 16 + pad;
-
-    canvas.fillRect(lcd.width() - w, 0, w, h, TFT_BLACK);
-
-    // Show clock
-    canvas.setCursor(lcd.width() - (pad + clock_width), pad);
-    canvas.setTextSize(2);
-    canvas.setTextColor(WHITE, BLACK);
-    if (gps.time.second() % 2)
-    {
-        canvas.printf("%02d:%02d", (gps.time.hour() + 9) % 24, gps.time.minute());
-    }
-    else
-    {
-        canvas.printf("%02d %02d", (gps.time.hour() + 9) % 24, gps.time.minute());
-    }
-
-    // Bluetooth status
-    if (SerialBT.connected())
-    {
-        bt_icon.pushSprite(lcd.width() - (bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
-    }
-
-    // GPS status
-    if (is_gps_active)
-    {
-        gps_icon.pushSprite(lcd.width() - (gps_icon_width + pad + bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
-    }
-}
-
-void pushInfoTopLeft()
-{
-    // Character size
-    // size 1: w6,  h8
-    // size 2: w12, h16
-    const int pad = 1;
-    const int w = pad + 12 * 5 + pad + 6 * 4 + pad;
-    const int h = pad + 16 + pad;
-
-    canvas.fillRect(0, 0, w, h, TFT_BLACK);
-
-    double speed = is_gps_active ? gps.speed.kmph() : 0.0;
-
-    canvas.setCursor(pad, pad);
-    canvas.setTextSize(2);
-    canvas.setTextColor(WHITE, BLACK);
-    canvas.printf("%5.1f", speed);
-
-    canvas.setCursor(pad + 12 * 5 + pad, pad + 12 - 6);
-    canvas.setTextSize(1);
-    canvas.print("km/h");
-}
-
-void drawCanvas()
-{
-    canvas.fillSprite(NO_CACHE_COLOR);
-    pushTileCache();
-    pushDirIcon();
-    pushInfoTopRight();
-    pushInfoTopLeft();
-    pushButtonLabels();
-    canvas.pushSprite(0, 0);
-}
-
 // ================================================================================
 // Zoom level
 // ================================================================================
@@ -1390,6 +1196,312 @@ void changeZoomLevel()
 }
 
 // ================================================================================
+// Icons and information displays
+// ================================================================================
+void initDirIcon()
+{
+    /*
+     * dir_icon color palette:
+     *   0: DIR_ICON_TRANS_COLOR
+     *   1: DIR_ICON_BG_COLOR
+     *   2: foreground color (DIR_ICON_COLOD_ACTIVE or DIR_ICON_COLOR_INACTIVE)
+     *   3: not used (default is TFT_WHITE)
+     */
+    if (VERBOSE)
+    {
+        Serial.printf("initDirIcon(): Initializing direction icon\n");
+    }
+
+    // Allocate sprite
+    dir_icon.setColorDepth(2);
+    gps_icon.setPsram(false);
+    dir_icon.createSprite(DIR_ICON_R * 2 + 1, DIR_ICON_R * 2 + 1);
+
+    // Set palette colors
+    dir_icon.setPaletteColor(dir_icon_palette_id_trans, DIR_ICON_TRANS_COLOR);
+    dir_icon.setPaletteColor(dir_icon_palette_id_bg, DIR_ICON_BG_COLOR);
+    dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_INACTIVE);
+
+    // Draw icon
+    dir_icon.fillSprite(dir_icon_palette_id_trans); // translucent background
+    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R, dir_icon_palette_id_fg);
+    dir_icon.fillCircle(DIR_ICON_R, DIR_ICON_R, DIR_ICON_R - DIR_ICON_EDGE_WIDTH,
+                        dir_icon_palette_id_bg);
+
+    int x0 = DIR_ICON_R;
+    int y0 = DIR_ICON_EDGE_WIDTH;
+    int x1 = DIR_ICON_R + (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
+    int y1 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
+    int x2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * cos(-M_PI_2 + DIR_ICON_ANGLE);
+    int y2 = DIR_ICON_R - (DIR_ICON_R - DIR_ICON_EDGE_WIDTH) * sin(-M_PI_2 + DIR_ICON_ANGLE);
+
+    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_palette_id_fg);
+
+    x0 = DIR_ICON_R;
+    y0 = (int)(DIR_ICON_R * 1.2);
+    dir_icon.fillTriangle(x0, y0, x1, y1, x2, y2, dir_icon_palette_id_bg);
+
+    // set center of rotation
+    dir_icon.setPivot(DIR_ICON_R, DIR_ICON_R);
+}
+
+void pushDirIcon()
+{
+    double dir_degree = gps.course.deg();
+    int offset_x = curr_gps_idx_coords.idx_x - display_center_idx_coords.idx_x + lcd.width() / 2;
+    int offset_y = curr_gps_idx_coords.idx_y - display_center_idx_coords.idx_y + lcd.height() / 2;
+
+    // When dir icon is out of canvas
+    if (!((-DIR_ICON_R < offset_x && offset_x < lcd.width() + DIR_ICON_R) &&
+          (-DIR_ICON_R < offset_y && offset_y < lcd.height() + DIR_ICON_R)))
+    {
+        if (VERBOSE)
+        {
+            Serial.printf("pushDirIcon(): out of canvas offset=(%d,%d)\n", offset_x, offset_y);
+        }
+
+        return;
+    }
+
+    if (is_gps_active)
+    {
+        dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_ACTIVE);
+    }
+    else
+    {
+        dir_icon.setPaletteColor(dir_icon_palette_id_fg, DIR_ICON_COLOR_INACTIVE);
+    }
+
+    dir_icon.pushRotateZoomWithAA(offset_x, offset_y, dir_degree, 1, 1,
+                                  dir_icon_palette_id_trans);
+}
+
+void pushButtonLabels()
+{
+    int h = 8;
+    int pad = 1;
+
+    canvas.setCursor(0, canvas.height() - h + pad);
+    canvas.setTextSize(1);
+    canvas.setTextColor(WHITE, BLACK);
+
+    canvas.setCursor(15, canvas.height() - h + pad);
+    canvas.print(" Brightness ");
+
+    canvas.setCursor(142, canvas.height() - h + pad);
+    canvas.print(" Zoom ");
+
+    if (!centering_mode)
+    {
+        canvas.setCursor(241, canvas.height() - h + pad);
+        canvas.print(" Center ");
+    }
+    else
+    {
+
+        Serial.printf("SerialBT.connected(): %d\n", SerialBT.connected());
+        if (!SerialBT.connected() && (millis() - bt_last_discover_ms) > bt_discover_interval_ms)
+        {
+            BTTryToConnectSPP();
+            bt_last_discover_ms = millis();
+        }
+    }
+}
+
+void initGPSIcon()
+{
+    Serial.printf("initGPSIcon(): Initializing GPS icon\n");
+    gps_icon.setPsram(false);
+    gps_icon.createSprite(satellite_icon_png_width, satellite_icon_png_height);
+    gps_icon.fillSprite(TFT_WHITE);
+    gps_icon.drawPng((std::uint8_t *)satellite_icon_png, satellite_icon_png_len, 0, 0);
+}
+
+void initBTIcon()
+{
+    Serial.printf("initBTIcon(): Initializing Bluetooth icon\n");
+    bt_icon.setPsram(false);
+    bt_icon.createSprite(bluetooth_icon_png_width, bluetooth_icon_png_height);
+    bt_icon.fillSprite(TFT_WHITE);
+    bt_icon.drawPng((std::uint8_t *)bluetooth_icon_png, bluetooth_icon_png_len, 0, 0);
+}
+
+void pushInfoTopRight()
+{
+    // [Memo] 12 x 18 = Character size in case of `canvas.setTextSize(2);`.
+    // The variable w is calculated from right to left.
+    const int pad = 1;
+    const int clock_width = 12 * 5; // 5 characters
+    const int gps_icon_width = satellite_icon_png_width;
+    const int bt_icon_width = bluetooth_icon_png_width;
+    const int w = pad + gps_icon_width + pad + bt_icon_width + clock_width + pad;
+    const int h = pad + 16 + pad;
+
+    canvas.fillRect(lcd.width() - w, 0, w, h, TFT_BLACK);
+
+    // Show clock
+    canvas.setCursor(lcd.width() - (pad + clock_width), pad);
+    canvas.setTextSize(2);
+    canvas.setTextColor(WHITE, BLACK);
+    if (gps.time.second() % 2)
+    {
+        canvas.printf("%02d:%02d", (gps.time.hour() + 9) % 24, gps.time.minute());
+    }
+    else
+    {
+        canvas.printf("%02d %02d", (gps.time.hour() + 9) % 24, gps.time.minute());
+    }
+
+    // Bluetooth status
+    if (SerialBT.connected())
+    {
+        bt_icon.pushSprite(lcd.width() - (bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
+    }
+
+    // GPS status
+    if (is_gps_active)
+    {
+        gps_icon.pushSprite(lcd.width() - (gps_icon_width + pad + bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
+    }
+}
+
+void pushInfoTopLeft()
+{
+    // Character size
+    // size 1: w6,  h8
+    // size 2: w12, h16
+    const int pad = 1;
+    const int w = pad + 12 * 5 + pad + 6 * 4 + pad;
+    const int h = pad + 16 + pad;
+
+    canvas.fillRect(0, 0, w, h, TFT_BLACK);
+
+    double speed = is_gps_active ? gps.speed.kmph() : 0.0;
+
+    canvas.setCursor(pad, pad);
+    canvas.setTextSize(2);
+    canvas.setTextColor(WHITE, BLACK);
+    canvas.printf("%5.1f", speed);
+
+    canvas.setCursor(pad + 12 * 5 + pad, pad + 12 - 6);
+    canvas.setTextSize(1);
+    canvas.print("km/h");
+}
+
+void drawCanvas()
+{
+    canvas.fillSprite(NO_CACHE_COLOR);
+    pushTileCache();
+    pushDirIcon();
+    pushInfoTopRight();
+    pushInfoTopLeft();
+    pushButtonLabels();
+    canvas.pushSprite(0, 0);
+}
+
+// ================================================================================
+// Button
+// ================================================================================
+void vibrate(int t_ms)
+{
+    M5.Axp.SetLDOEnable(3, true);
+    delay(t_ms);
+    M5.Axp.SetLDOEnable(3, false);
+}
+
+void centeringHandler(Event &e)
+{
+    /*
+     * Recover to centering mode
+     */
+    if (VERBOSE)
+    {
+        Serial.printf("centeringHandler() is called.\n");
+    }
+
+    centering_mode = true;
+    display_center_idx_coords.idx_x = curr_gps_idx_coords.idx_x;
+    display_center_idx_coords.idx_y = curr_gps_idx_coords.idx_y;
+
+    updateTileCache();
+    drawCanvas();
+}
+
+void zoomHandler(Event &e)
+{
+    /*
+     * Change zoom level
+     */
+    if (VERBOSE)
+    {
+        Serial.printf("zoomHandler() is called.\n");
+    }
+
+    changeZoomLevel();
+
+    updateTileCache();
+    drawCanvas();
+}
+
+void moveHandler(Event &e)
+{
+    /*
+     * Scroll tile
+     */
+    centering_mode = false;
+
+    int diff_x = e.to.x - e.from.x;
+    int diff_y = e.to.y - e.from.y;
+
+    display_center_idx_coords.idx_x -= diff_x;
+    display_center_idx_coords.idx_y -= diff_y;
+
+    drawCanvas();
+
+    if (VERBOSE)
+    {
+        Serial.printf("moveHandler(): display_center_idx_coords (x=%d,y=%d)", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
+        Serial.printf("  diff (x=%d,y=%d)\n", diff_x, diff_y);
+    }
+}
+
+void toggleBrightnessHandler(Event &e)
+{
+    if (VERBOSE)
+    {
+        Serial.printf("toggleBrightnessHandler(): %d", brightness_list[i_brightness]);
+    }
+
+    i_brightness = (i_brightness + 1) % n_brightness;
+    lcd.setBrightness(brightness_list[i_brightness]);
+
+    if (VERBOSE)
+    {
+        Serial.printf("->%d", brightness_list[i_brightness]);
+    }
+}
+
+void smartTileLoadingHandler(Event &e)
+{
+    if (VERBOSE)
+    {
+        Serial.printf("smartTileLoadingHandler() is called.\n");
+    }
+    smartTileLoading(true);
+}
+
+void setupButtonHandlers()
+{
+    M5.background.delHandlers();
+
+    M5.background.addHandler(moveHandler, E_MOVE);
+    M5.background.addHandler(smartTileLoadingHandler, E_RELEASE);
+    M5.BtnA.addHandler(toggleBrightnessHandler, E_RELEASE);
+    M5.BtnB.addHandler(zoomHandler, E_RELEASE);
+    M5.BtnC.addHandler(centeringHandler, E_RELEASE);
+}
+
+// ================================================================================
 // Sound
 // ================================================================================
 bool checkIfUseSound()
@@ -1485,109 +1597,6 @@ void playGPSInactive()
 {
     writeSound2Speaker(gps_inactive_raw, gps_inactive_raw_len);
 }
-
-// ================================================================================
-// Button
-// ================================================================================
-void vibrate(int t_ms)
-{
-    M5.Axp.SetLDOEnable(3, true);
-    delay(t_ms);
-    M5.Axp.SetLDOEnable(3, false);
-}
-
-void centeringHandler(Event &e)
-{
-    /*
-     * Recover to centering mode
-     */
-    if (VERBOSE)
-    {
-        Serial.printf("centeringHandler() is called.\n");
-    }
-
-    centering_mode = true;
-    display_center_idx_coords.idx_x = curr_gps_idx_coords.idx_x;
-    display_center_idx_coords.idx_y = curr_gps_idx_coords.idx_y;
-
-    updateTileCache();
-    drawCanvas();
-}
-
-void zoomHandler(Event &e)
-{
-    /*
-     * Change zoom level
-     */
-    if (VERBOSE)
-    {
-        Serial.printf("zoomHandler() is called.\n");
-    }
-
-    changeZoomLevel();
-
-    updateTileCache();
-    drawCanvas();
-}
-
-void moveHandler(Event &e)
-{
-    /*
-     * Scroll tile
-     */
-    centering_mode = false;
-
-    int diff_x = e.to.x - e.from.x;
-    int diff_y = e.to.y - e.from.y;
-
-    display_center_idx_coords.idx_x -= diff_x;
-    display_center_idx_coords.idx_y -= diff_y;
-
-    drawCanvas();
-
-    if (VERBOSE)
-    {
-        Serial.printf("moveHandler(): display_center_idx_coords (x=%d,y=%d)", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
-        Serial.printf("  diff (x=%d,y=%d)\n", diff_x, diff_y);
-    }
-}
-
-void toggleBrightnessHandler(Event &e)
-{
-    if (VERBOSE)
-    {
-        Serial.printf("toggleBrightnessHandler(): %d", brightness_list[i_brightness]);
-    }
-
-    i_brightness = (i_brightness + 1) % n_brightness;
-    lcd.setBrightness(brightness_list[i_brightness]);
-
-    if (VERBOSE)
-    {
-        Serial.printf("->%d", brightness_list[i_brightness]);
-    }
-}
-
-void smartTileLoadingHandler(Event &e)
-{
-    if (VERBOSE)
-    {
-        Serial.printf("smartTileLoadingHandler() is called.\n");
-    }
-    smartTileLoading();
-}
-
-void setupButtonHandlers()
-{
-    M5.background.delHandlers();
-
-    M5.background.addHandler(moveHandler, E_MOVE);
-    M5.background.addHandler(smartTileLoadingHandler, E_RELEASE);
-    M5.BtnA.addHandler(toggleBrightnessHandler, E_RELEASE);
-    M5.BtnB.addHandler(zoomHandler, E_RELEASE);
-    M5.BtnC.addHandler(centeringHandler, E_RELEASE);
-}
-
 // ========================================
 // M5Stack loop
 // ========================================
@@ -1606,7 +1615,7 @@ void setup(void)
     lcd.println("Initializing");
 
     // Serial connection for debug
-    Serial.println("Initializing cycle_navi");
+    Serial.println("Initializing");
 
     // Initialize the SD card.
     if (!sd.begin(SD_CONFIG))
@@ -1655,15 +1664,8 @@ void loop()
     checkGPS();
 
     updateTileCache();
+    smartTileLoading(false);
     drawCanvas();
-    smartTileLoading();
-
-    Serial.printf("SerialBT.connected(): %d\n", SerialBT.connected());
-    if (!SerialBT.connected() && (millis() - bt_last_discover_ms) > bt_discover_interval_ms)
-    {
-        BTTryToConnectSPP();
-        bt_last_discover_ms = millis();
-    }
 
     do // Smart delay
     {
