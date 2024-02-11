@@ -36,8 +36,8 @@
 // Variables declaration
 // ================================================================================
 // Common
-#define CYCLE_NAVI_VERSION 201
-#define CYCLE_NAVI_VERSION_STRING "2.1"
+#define CYCLE_NAVI_VERSION 202
+#define CYCLE_NAVI_VERSION_STRING "2.2"
 #define SUCCESS 1
 #define ERROR 0
 #define VERBOSE 1 // Set non-zero for verbose log mode
