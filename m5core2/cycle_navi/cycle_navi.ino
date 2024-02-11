@@ -19,21 +19,18 @@
  * 描画プロセスの再検討。指離してから読み込みするようにする。
  */
 
-#include <SdFat.h>       // Define SdFat.h before LovyanGFX.hpp
-#include <M5Core2.h>
+#include <SdFat.h> // Define SdFat.h before LovyanGFX.hpp
+#include <M5Unified.h>
 #include <TinyGPSPlus.h> // Installed through arduino IDE library manager
-#include <math.h>
 
-#define LGFX_M5STACK_CORE2
-#include <LovyanGFX.hpp> // Installed through arduino IDE library manager
-#include <LGFX_AUTODETECT.hpp>
+#include <math.h>
 
 #include <driver/i2s.h>
 #include "sound_boot.h"
 #include "sound_gps_active.h"
 #include "sound_gps_inactive.h"
-#include "satellite_icon.h"
-#include "bluetooth_icon.h"
+#include "icon_satellite.h"
+#include "icon_bluetooth.h"
 
 // ===============================================================================
 // Variables declaration
@@ -47,24 +44,30 @@
 
 // Settings
 const unsigned long interval_sec = 1;
-const unsigned long bt_discover_interval_sec = 20;
+const unsigned long bt_discover_interval_ms = 20 * 1000;
+const unsigned long smart_loading_delay_ms = 500;
 const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
 const char route_dir_path[] = "/route_dat";
 const char point_dir_path[] = "/point_dat";
 const char init_point_path[] = "/initPoint";
+#define TIMEZONE_HOUR 9
+#define REMOVE_ALL_BONDED_BT_DEVICES 0
+
+// Variables [Timers]
+unsigned long interval_ms = interval_sec * 1000;
+unsigned long t_prev, t_curr;
+unsigned long t_last_bt_discover = 0;
+unsigned long t_last_touch_move = 0;
 
 // Variables [GPS]
 TinyGPSPlus gps;
-unsigned long interval_ms = interval_sec * 1000;
-unsigned long t_prev, t_curr;
 bool is_gps_active = false;
 const int gps_count_th = 3;
-bool isUpdatedPrev = false;
 int gps_active_counter = 0;
-const unsigned long bt_discover_interval_ms = 1000 * bt_discover_interval_sec;
-unsigned long bt_last_discover_ms = -1 * 1000 * bt_discover_interval_sec;
+bool isUpdatedPrev = false;
 
+// Variables [Coordinates]
 struct st_tile_coords
 {
     int zoom;
@@ -99,23 +102,21 @@ const int tile_size_power = (int)round(log2(tile_size));
 const int n_sprite_x = 3;
 const int n_sprite_y = 3;
 const int n_sprite = n_sprite_x * n_sprite_y;
-static LGFX lcd;
-static LGFX_Sprite canvas(&lcd); // screen buffer
-LGFX_Sprite dir_icon(&canvas);
-LGFX_Sprite gps_icon(&canvas);
-LGFX_Sprite bt_icon(&canvas);
-LGFX_Sprite updating_icon(&canvas);
-
+static M5Canvas canvas(&M5.Display); // screen buffer
+M5Canvas dir_icon(&canvas);
+M5Canvas gps_icon(&canvas);
+M5Canvas bt_icon(&canvas);
 struct sprite_struct
 {
     st_tile_coords tile_coords;
-    LGFX_Sprite *sprite;
+    M5Canvas *sprite;
     bool is_update_required;
 };
 sprite_struct tile_cache_buf[n_sprite];
 sprite_struct *tile_cache[n_sprite];
 bool is_tile_cache_initialized = false;
 
+// Variables [Zoom]
 #define LEN_ZOOM_LIST 20
 struct st_zoom
 {
@@ -125,6 +126,7 @@ struct st_zoom
 };
 st_zoom zoom;
 
+// Variables [Colors]
 // Color name:
 //   TFT_BLACK, TFT_NAVY, TFT_DARKGREEN, TFT_MAROON, TFT_PURPLE,
 //   TFT_OLIVE, TFT_LIGHTGREY, TFT_DARKGREY, TFT_BLUE, TFT_GREENYELLOW,
@@ -148,22 +150,12 @@ const int dir_icon_palette_id_trans = 0;
 const int dir_icon_palette_id_bg = 1;
 const int dir_icon_palette_id_fg = 2;
 
+// Variables [Brightness]
 const int brightness_list[] = {255, 128, 64, 32};
 const int n_brightness = 4;
 int i_brightness = 0;
 
 // Variables [Sound]
-#define CONFIG_I2S_BCK_PIN 12
-#define CONFIG_I2S_LRCK_PIN 0
-#define CONFIG_I2S_DATA_PIN 2
-#define CONFIG_I2S_DATA_IN_PIN 34
-
-#define Speak_I2S_NUMBER I2S_NUM_0
-#define SAMPLE_RATE 16000
-
-#define MODE_MIC 0
-#define MODE_SPK 1
-
 bool use_sound;
 
 // ================================================================================
@@ -182,6 +174,7 @@ FsFile file;
 
 // Try to select the best SD card configuration.
 // M5Core2 shares SPI but between SD card and the LCD display
+#define TFCARD_CS_PIN 4
 #define SD_CONFIG SdSpiConfig(TFCARD_CS_PIN, SHARED_SPI, SPI_CLOCK)
 
 /* ================================================================================
@@ -208,6 +201,7 @@ esp_spp_role_t role = ESP_SPP_ROLE_SLAVE;  // or ESP_SPP_ROLE_MASTER
 #define PAIR_MAX_DEVICES 20
 uint8_t pairedDeviceBtAddr[PAIR_MAX_DEVICES][6];
 char bda_str[18];
+bool bt_user_switch = true;
 
 void BTAuthCompleteCallback(boolean success)
 {
@@ -275,22 +269,123 @@ void BTTryToConnectSPP()
                     Serial.printf("[BT] connecting to %s - %d\n", bt_address.toString().c_str(), channel);
                     SerialBT.connect(bt_address, channel, sec_mask, role);
                 }
-
-                if (REMOVE_BONDED_DEVICES)
-                {
-                    esp_err_t tError = esp_bt_gap_remove_bond_device(pairedDeviceBtAddr[i]);
-                    if (ESP_OK == tError)
-                    {
-                        Serial.print("[BT] Removed bonded device # ");
-                    }
-                    else
-                    {
-                        Serial.print("[BT] Failed to remove bonded device # ");
-                    }
-                    Serial.println(i);
-                }
             }
         }
+    }
+}
+
+void removeAllBondedDevices()
+{
+    int count = esp_bt_gap_get_bond_device_num();
+    if (!count)
+    {
+        Serial.println("[BT] No bonded device found.");
+    }
+    else
+    {
+        Serial.print("[BT] Bonded device count: ");
+        Serial.println(count);
+        if (PAIR_MAX_DEVICES < count)
+        {
+            count = PAIR_MAX_DEVICES;
+            Serial.print("[BT] Reset bonded device count: ");
+            Serial.println(count);
+        }
+        esp_err_t tError = esp_bt_gap_get_bond_device_list(&count, pairedDeviceBtAddr);
+        if (ESP_OK == tError)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                Serial.print("[BT] Found bonded device # ");
+                Serial.print(i);
+                Serial.print(" -> ");
+                Serial.println(bda2str(pairedDeviceBtAddr[i], bda_str, 18));
+
+                esp_err_t tError = esp_bt_gap_remove_bond_device(pairedDeviceBtAddr[i]);
+                if (ESP_OK == tError)
+                {
+                    Serial.print("[BT] Removed bonded device # ");
+                }
+                else
+                {
+                    Serial.print("[BT] Failed to remove bonded device # ");
+                }
+                Serial.println(i);
+            }
+        }
+    }
+}
+
+void enableBt()
+{
+    if (VERBOSE)
+    {
+        Serial.println("enableBt()");
+    }
+    
+    bt_user_switch = true;
+    pushBtConnecting();
+    BTTryToConnectSPP();
+    t_last_bt_discover = millis();
+}
+
+void disableBt() {
+    if (VERBOSE)
+    {
+        Serial.println("disableBt()");
+    }
+    
+    bt_user_switch = false;
+    SerialBT.disconnect();
+}
+
+void pushBtConnecting(){
+    // [Memo]
+    // Character size
+    //   size 1: w6,  h8
+    //   size 2: w12, h16
+    //   size 3: w18, h24
+    const int pad = 3;
+    const int text_size = 2;
+    const int char_w = 12;
+    const int char_h = 16;
+    const int icon_w = 16;
+    const int icon_h = 16;
+    const int w = pad + 16 + pad + char_w * 10 + pad;
+    const int h = pad + char_h + pad;
+    const char text[] = "Connecting";
+
+    const int offset_x = M5.Display.width() / 2 - w / 2;
+    const int offset_y = M5.Display.height() / 2 - h / 2;
+
+    canvas.fillRect(offset_x, offset_y, w, h, TFT_BLACK);
+    bt_icon.pushSprite(offset_x + pad, offset_y + pad);
+
+    canvas.setCursor(offset_x + pad + icon_w + pad, offset_y + pad);
+    canvas.setTextSize(text_size);
+    canvas.setTextColor(WHITE, BLACK);
+    canvas.print(text);
+
+    canvas.pushSprite(0, 0);
+}
+
+void checkBTconnection()
+{
+    if (VERBOSE)
+    {
+        Serial.printf("checkBTconnection(): bt_user_switch=%d\n", bt_user_switch);
+    }
+
+    if (!bt_user_switch)
+    {
+        return;
+    }
+
+    if (!SerialBT.connected() && (t_last_bt_discover + bt_discover_interval_ms) < millis())
+    {
+        pushBtConnecting();
+        BTTryToConnectSPP();
+        t_last_bt_discover = millis();
     }
 }
 
@@ -476,6 +571,16 @@ void checkGPS()
             display_center_idx_coords.idx_y = curr_gps_idx_coords.idx_y;
         }
 
+        // Update RTC
+        m5::rtc_datetime_t datetime;
+        datetime.date.year = gps.date.year();
+        datetime.date.month = gps.date.month();
+        datetime.date.date = gps.date.day();
+        datetime.time.hours = gps.time.hour();
+        datetime.time.minutes = gps.time.minute();
+        datetime.time.seconds = gps.time.second();
+        M5.Rtc.setDateTime(&datetime);
+
         if (VERBOSE)
         {
             Serial.printf("checkGPS()\n");
@@ -491,6 +596,13 @@ void checkGPS()
                           display_center_idx_coords.zoom,
                           display_center_idx_coords.idx_x,
                           display_center_idx_coords.idx_y);
+            Serial.printf("  RTC updated: %04d/%02d/%02d %02d:%02d:%02d",
+                          datetime.date.year,
+                          datetime.date.month,
+                          datetime.date.date,
+                          datetime.time.hours,
+                          datetime.time.minutes,
+                          datetime.time.seconds);
         }
     }
     else
@@ -513,23 +625,23 @@ void genMapPath(char *file_path,
 
 void initTileCache()
 {
-    int cap_dma, cap_spiram;
-    int cap_dma_after, cap_spiram_after;
+    int cap_ram, cap_spiram;
+    int cap_ram_after, cap_spiram_after;
     if (VERBOSE)
     {
-        cap_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        cap_ram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         cap_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
         Serial.printf("initTileCache():\n");
-        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_DMA):   %8d byte\n", cap_dma);
-        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_SPIRAM):%8d byte\n", cap_spiram);
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_INTERNAL):%8d byte\n", cap_ram);
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_SPIRAM):  %8d byte\n", cap_spiram);
     }
 
     for (int i = 0; i < n_sprite; i++)
     {
         tile_cache[i] = &tile_cache_buf[i];
 
-        tile_cache[i]->sprite = new LGFX_Sprite(&canvas);
+        tile_cache[i]->sprite = new M5Canvas(&canvas);
         tile_cache[i]->sprite->setPsram(true);
         tile_cache[i]->sprite->createSprite(tile_size, tile_size);
         tile_cache[i]->sprite->fillSprite(NO_CACHE_COLOR);
@@ -543,20 +655,20 @@ void initTileCache()
 
     if (VERBOSE)
     {
-        cap_dma_after = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        cap_ram_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         cap_spiram_after = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
         Serial.printf("  tile_cache[%d] allocated.\n", n_sprite);
-        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_DMA):   %8d byte (%d)\n",
-                      cap_dma_after, cap_dma_after - cap_dma);
-        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_SPIRAM):%8d byte (%d)\n",
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_INTERNAL):%8d byte (%d)\n",
+                      cap_ram_after, cap_ram_after - cap_ram);
+        Serial.printf("    heap_caps_get_free_size(MALLOC_CAP_SPIRAM):  %8d byte (%d)\n",
                       cap_spiram_after, cap_spiram_after - cap_spiram);
     }
 
     is_tile_cache_initialized = true;
 }
 
-void loadTile(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
+void loadTile(M5Canvas *sprite, int zoom, int tile_x, int tile_y)
 {
     char file_path[LEN_FILE_PATH];
     uint32_t t;
@@ -780,8 +892,8 @@ void pushTileCache()
 
     for (int i = 0; i < n_sprite; i++)
     {
-        x = tile_cache[i]->tile_coords.tile_x * tile_size - display_center_idx_coords.idx_x + lcd.width() / 2;
-        y = tile_cache[i]->tile_coords.tile_y * tile_size - display_center_idx_coords.idx_y + lcd.height() / 2;
+        x = tile_cache[i]->tile_coords.tile_x * tile_size - display_center_idx_coords.idx_x + M5.Display.width() / 2;
+        y = tile_cache[i]->tile_coords.tile_y * tile_size - display_center_idx_coords.idx_y + M5.Display.height() / 2;
 
         tile_cache[i]->sprite->pushSprite(x, y);
 
@@ -799,11 +911,120 @@ void smartTileLoading(const bool draw_canvas = true)
 {
     int j;
     int tile_zoom, tile_x, tile_y;
-    LGFX_Sprite *p_tile_sprite;
+    M5Canvas *p_tile_sprite;
 
     if (VERBOSE)
     {
         Serial.printf("smartTileLoading():\n");
+    }
+
+    if (!is_tile_cache_initialized)
+    {
+        if (VERBOSE)
+        {
+            Serial.printf("  tile_cache is not initialized.\n");
+        }
+        return;
+    }
+
+    if (t_last_touch_move + smart_loading_delay_ms > millis())
+    {
+        return;
+    }
+
+    // Prepare array of indices sorted by proximity to the current point
+    float curr_center_x = float(display_center_idx_coords.idx_x) / tile_size;
+    float curr_center_y = float(display_center_idx_coords.idx_y) / tile_size;
+    std::array<int, n_sprite> idx_ary;
+    std::array<float, n_sprite> dist_ary;
+    for (int i = 0; i < n_sprite; i++)
+    {
+        idx_ary[i] = i;
+        dist_ary[i] = fabs(tile_cache[i]->tile_coords.tile_x + 0.5 - curr_center_x) + fabs(tile_cache[i]->tile_coords.tile_y + 0.5 - curr_center_y);
+    }
+    std::sort(idx_ary.begin(), idx_ary.end(), [&](int idx_a, int idx_b)
+              { return dist_ary[idx_a] < dist_ary[idx_b]; });
+
+    if (VERBOSE)
+    {
+        Serial.printf("  Current center: %f %f\n",
+                      curr_center_x,
+                      curr_center_y);
+    }
+
+    // Check each sprite
+    for (int i = 0; i < n_sprite; i++)
+    {
+        j = idx_ary[i];
+
+        if (tile_cache[j]->is_update_required)
+        {
+            M5.update();
+            auto t = M5.Touch.getDetail();
+
+            if (t.isPressed())
+            {
+                if (VERBOSE)
+                {
+                    Serial.printf("  tile_cache[%d] interrupted\n", j);
+                }
+
+                break;
+            }
+
+            p_tile_sprite = tile_cache[j]->sprite;
+            tile_zoom = tile_cache[j]->tile_coords.zoom;
+            tile_x = tile_cache[j]->tile_coords.tile_x;
+            tile_y = tile_cache[j]->tile_coords.tile_y;
+
+            if (VERBOSE)
+            {
+                Serial.printf("  Updating (i=%d,z=%d,tile_x=%d,tile_y=%d)\n    ",
+                              i, tile_zoom, tile_x, tile_y);
+            }
+
+            loadTile(p_tile_sprite, tile_zoom, tile_x, tile_y);
+
+            if (VERBOSE)
+            {
+                Serial.printf("    ");
+            }
+            loadRoute(p_tile_sprite, tile_zoom, tile_x, tile_y);
+
+            if (VERBOSE)
+            {
+                Serial.printf("    ");
+            }
+            loadPoint(p_tile_sprite, tile_zoom, tile_x, tile_y);
+
+            tile_cache[j]->is_update_required = false;
+
+            if (draw_canvas)
+            {
+                drawCanvas();
+            }
+        }
+    }
+}
+
+void smartTileLoadingOld(const bool draw_canvas = true)
+{
+    int j;
+    int tile_zoom, tile_x, tile_y;
+    M5Canvas *p_tile_sprite;
+
+    if (VERBOSE)
+    {
+        Serial.printf("smartTileLoading():\n");
+    }
+
+    if (!is_tile_cache_initialized)
+    {
+        if (VERBOSE)
+        {
+            Serial.printf("  tile_cache is not initialized.\n");
+        }
+        return;
     }
 
     for (int i = 0; i < n_sprite; i++)
@@ -813,13 +1034,15 @@ void smartTileLoading(const bool draw_canvas = true)
         if (tile_cache[j]->is_update_required)
         {
             M5.update();
-            if (M5.Touch.ispressed() || !is_tile_cache_initialized)
+            auto t = M5.Touch.getDetail();
+
+            if (t.isPressed())
             {
                 i_smart_loading = j;
 
                 if (VERBOSE)
                 {
-                    Serial.printf("%d interrupted\n", j);
+                    Serial.printf("  tile_cache[%d] interrupted\n", j);
                 }
 
                 break;
@@ -908,7 +1131,7 @@ void initMapVariables()
 void initCanvas()
 {
     canvas.setPsram(true);
-    canvas.createSprite(lcd.width(), lcd.height());
+    canvas.createSprite(M5.Display.width(), M5.Display.height());
     canvas.fillSprite(NO_CACHE_COLOR);
 }
 
@@ -924,7 +1147,7 @@ void genPointPath(char *file_path, int z, int tile_x, int tile_y)
              tile_x, tile_y);
 }
 
-void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
+void loadRoute(M5Canvas *sprite, int zoom, int tile_x, int tile_y)
 {
     int prev_point_x, prev_point_y, point_x, point_y;
     char file_path[LEN_FILE_PATH];
@@ -991,7 +1214,7 @@ void loadRoute(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
     file.close();
 }
 
-void loadPoint(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
+void loadPoint(M5Canvas *sprite, int zoom, int tile_x, int tile_y)
 {
     int point_x, point_y;
     char file_path[LEN_FILE_PATH];
@@ -1039,7 +1262,7 @@ void loadPoint(LGFX_Sprite *sprite, int zoom, int tile_x, int tile_y)
     file.close();
 }
 
-void drawLineWithStroke(LGFX_Sprite *sprite, int x_1, int y_1, int x_2, int y_2,
+void drawLineWithStroke(M5Canvas *sprite, int x_1, int y_1, int x_2, int y_2,
                         int stroke, uint16_t color)
 {
     int center_i = stroke / 2; // floored automatically
@@ -1132,12 +1355,12 @@ void initDirIcon()
 void pushDirIcon()
 {
     double dir_degree = gps.course.deg();
-    int offset_x = curr_gps_idx_coords.idx_x - display_center_idx_coords.idx_x + lcd.width() / 2;
-    int offset_y = curr_gps_idx_coords.idx_y - display_center_idx_coords.idx_y + lcd.height() / 2;
+    int offset_x = curr_gps_idx_coords.idx_x - display_center_idx_coords.idx_x + M5.Display.width() / 2;
+    int offset_y = curr_gps_idx_coords.idx_y - display_center_idx_coords.idx_y + M5.Display.height() / 2;
 
     // When dir icon is out of canvas
-    if (!((-DIR_ICON_R < offset_x && offset_x < lcd.width() + DIR_ICON_R) &&
-          (-DIR_ICON_R < offset_y && offset_y < lcd.height() + DIR_ICON_R)))
+    if (!((-DIR_ICON_R < offset_x && offset_x < M5.Display.width() + DIR_ICON_R) &&
+          (-DIR_ICON_R < offset_y && offset_y < M5.Display.height() + DIR_ICON_R)))
     {
         if (VERBOSE)
         {
@@ -1162,23 +1385,39 @@ void pushDirIcon()
 
 void pushButtonLabels()
 {
-    int h = 8;
-    int pad = 1;
+    const int h = 8;
+    const int pad = 1;
 
     canvas.setCursor(0, canvas.height() - h + pad);
     canvas.setTextSize(1);
     canvas.setTextColor(WHITE, BLACK);
 
+    // BtnA
     canvas.setCursor(15, canvas.height() - h + pad);
     canvas.print(" Brightness ");
 
+    // BtnB
     canvas.setCursor(142, canvas.height() - h + pad);
     canvas.print(" Zoom ");
 
+    // BtnC
     if (!centering_mode)
     {
         canvas.setCursor(241, canvas.height() - h + pad);
         canvas.print(" Center ");
+    }
+    else
+    {
+        if (bt_user_switch)
+        {
+            canvas.setCursor(241, canvas.height() - h + pad);
+            canvas.print(" BT Off ");
+        }
+        else
+        {
+            canvas.setCursor(244, canvas.height() - h + pad);
+            canvas.print(" BT On ");
+        }
     }
 }
 
@@ -1210,32 +1449,33 @@ void pushInfoTopRight()
     const int bt_icon_width = bluetooth_icon_png_width;
     const int w = pad + gps_icon_width + pad + bt_icon_width + clock_width + pad;
     const int h = pad + 16 + pad;
+    char colon = ':';
 
-    canvas.fillRect(lcd.width() - w, 0, w, h, TFT_BLACK);
+    canvas.fillRect(M5.Display.width() - w, 0, w, h, TFT_BLACK);
 
     // Show clock
-    canvas.setCursor(lcd.width() - (pad + clock_width), pad);
+    canvas.setCursor(M5.Display.width() - (pad + clock_width), pad);
     canvas.setTextSize(2);
     canvas.setTextColor(WHITE, BLACK);
-    if (gps.time.second() % 2)
-    {
-        canvas.printf("%02d:%02d", (gps.time.hour() + 9) % 24, gps.time.minute());
-    }
-    else
-    {
-        canvas.printf("%02d %02d", (gps.time.hour() + 9) % 24, gps.time.minute());
-    }
+
+    auto time_utc = M5.Rtc.getTime();
+    colon = (time_utc.seconds % 2) ? ':' : ' ';
+
+    canvas.printf("%02d%c%02d",
+                  mod(time_utc.hours + TIMEZONE_HOUR, 24),
+                  colon,
+                  time_utc.minutes);
 
     // Bluetooth status
     if (SerialBT.connected())
     {
-        bt_icon.pushSprite(lcd.width() - (bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
+        bt_icon.pushSprite(M5.Display.width() - (bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
     }
 
     // GPS status
     if (is_gps_active)
     {
-        gps_icon.pushSprite(lcd.width() - (gps_icon_width + pad + bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
+        gps_icon.pushSprite(M5.Display.width() - (gps_icon_width + pad + bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
     }
 }
 
@@ -1271,6 +1511,22 @@ void drawCanvas()
     pushInfoTopLeft();
     pushButtonLabels();
     canvas.pushSprite(0, 0);
+}
+
+void incrementBrightness()
+{
+    int i_brightness_new = mod(i_brightness + 1, n_brightness);
+
+    M5.Display.setBrightness(brightness_list[i_brightness_new]);
+
+    if (VERBOSE)
+    {
+        Serial.printf("incrementBrightness(): brightness %d -> %d",
+                      brightness_list[i_brightness],
+                      brightness_list[i_brightness_new]);
+    }
+
+    i_brightness = i_brightness_new;
 }
 
 // ================================================================================
@@ -1357,6 +1613,7 @@ void increment_zoom_level()
 
 void changeZoomLevel()
 {
+    // Change zoom level index
     int zoom_old = zoom.list[zoom.i];
     increment_zoom_level();
 
@@ -1365,19 +1622,22 @@ void changeZoomLevel()
         Serial.printf("changeZoomLevel(): %d->%d, ", zoom_old, zoom_level());
     }
 
+    // Convert coordinates for the new zoom level
     st_idx_coords idx_coords_new;
     idx_coords_new.zoom = zoom_level();
 
     convIdxCoordsForZoom(display_center_idx_coords, idx_coords_new);
+    display_center_idx_coords = idx_coords_new;
 
     if (VERBOSE)
     {
-        Serial.printf("display_center_idx_coords (%d,%d)->", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
+        Serial.printf("display_center_idx_coords (%d,%d)->",
+                      display_center_idx_coords.idx_x,
+                      display_center_idx_coords.idx_y);
         Serial.printf("(%d,%d)\n", idx_coords_new.idx_x, idx_coords_new.idx_y);
     }
 
-    display_center_idx_coords = idx_coords_new;
-
+    // Update gps_idx_coords for the new zoom level immidiately
     if (centering_mode)
     {
         curr_gps_idx_coords = display_center_idx_coords;
@@ -1410,100 +1670,59 @@ bool checkIfUseSound()
     return ret;
 }
 
-void InitI2SSpeakOrMic(int mode)
-{
-    esp_err_t err = ESP_OK;
-
-    i2s_driver_uninstall(Speak_I2S_NUMBER);
-    i2s_config_t i2s_config = {.mode = (i2s_mode_t)(I2S_MODE_MASTER),
-                               .sample_rate = SAMPLE_RATE,
-                               .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-                               .channel_format = I2S_CHANNEL_FMT_ALL_RIGHT,
-                               .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-                               .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-                               .dma_buf_count = 6,
-                               .dma_buf_len = 60,
-                               .use_apll = false,
-                               .tx_desc_auto_clear = true,
-                               .fixed_mclk = 0};
-    if (mode == MODE_MIC)
-    {
-        i2s_config.mode =
-            (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM);
-    }
-    else
-    {
-        i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-    }
-
-    err += i2s_driver_install(Speak_I2S_NUMBER, &i2s_config, 0, NULL);
-
-    // Initialization and decrlaration should be done simultaneouly.
-    // The sample code from M5Stack core2 which declares and assignment
-    // doesn't work.
-    i2s_pin_config_t tx_pin_config = {
-        .bck_io_num = CONFIG_I2S_BCK_PIN,
-        .ws_io_num = CONFIG_I2S_LRCK_PIN,
-        .data_out_num = CONFIG_I2S_DATA_PIN,
-        .data_in_num = CONFIG_I2S_DATA_IN_PIN,
-    };
-    err += i2s_set_pin(Speak_I2S_NUMBER, &tx_pin_config);
-
-    if (mode != MODE_MIC)
-    {
-        err += i2s_set_clk(Speak_I2S_NUMBER, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT,
-                           I2S_CHANNEL_MONO);
-    }
-}
-
-size_t writeSound2Speaker(const unsigned char sound_data[], int data_len)
-{
-    size_t bytes_written = 0;
-
-    M5.Axp.SetSpkEnable(true);
-    InitI2SSpeakOrMic(MODE_SPK);
-
-    i2s_write(Speak_I2S_NUMBER, sound_data, data_len, &bytes_written,
-              portMAX_DELAY);
-
-    InitI2SSpeakOrMic(MODE_MIC);
-    M5.Axp.SetSpkEnable(false);
-
-    return bytes_written;
-}
-
 void playBoot()
 {
-    writeSound2Speaker(boot_raw, boot_raw_len);
+    int sampling_rate = 16000;
+    M5.Speaker.playRaw(boot_16k_u8_raw, boot_16k_u8_raw_len, sampling_rate);
 }
 void playGPSActive()
 {
-    writeSound2Speaker(gps_active_raw, gps_active_raw_len);
+    int sampling_rate = 16000;
+    M5.Speaker.playRaw(gps_active_16k_u8_raw, gps_active_16k_u8_raw_len, sampling_rate);
 }
 
 void playGPSInactive()
 {
-    writeSound2Speaker(gps_inactive_raw, gps_inactive_raw_len);
+    int sampling_rate = 16000;
+    M5.Speaker.playRaw(gps_inactive_16k_u8_raw, gps_inactive_16k_u8_raw_len, sampling_rate);
 }
 
 // ================================================================================
-// Button
+// Button & Touch
 // ================================================================================
-void vibrate(int t_ms)
+void checkTouchMoveEvent()
 {
-    M5.Axp.SetLDOEnable(3, true);
-    delay(t_ms);
-    M5.Axp.SetLDOEnable(3, false);
+    auto t = M5.Touch.getDetail();
+
+    auto dx = t.deltaX();
+    auto dy = t.deltaY();
+
+    if (t.isPressed() && (dx || dy)) // If moving
+    {
+        centering_mode = false;
+        t_last_touch_move = millis();
+
+        display_center_idx_coords.idx_x -= dx;
+        display_center_idx_coords.idx_y -= dy;
+
+        drawCanvas();
+
+        if (VERBOSE)
+        {
+            Serial.printf("checkTouchMoveEvent(): display_center_idx_coords (x=%d,y=%d)", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
+            Serial.printf(" diff (x=%d,y=%d)\n", dx, dy);
+        }
+    }
 }
 
-void centeringHandler(Event &e)
+void enableCentering()
 {
     /*
-     * Recover to centering mode
+     * Back to centering mode
      */
     if (VERBOSE)
     {
-        Serial.printf("centeringHandler() is called.\n");
+        Serial.printf("enableCentering() is called.\n");
     }
 
     centering_mode = true;
@@ -1511,81 +1730,39 @@ void centeringHandler(Event &e)
     display_center_idx_coords.idx_y = curr_gps_idx_coords.idx_y;
 
     updateTileCache();
-    drawCanvas();
-}
-
-void zoomHandler(Event &e)
-{
-    /*
-     * Change zoom level
-     */
-    if (VERBOSE)
-    {
-        Serial.printf("zoomHandler() is called.\n");
-    }
-
-    changeZoomLevel();
-
-    updateTileCache();
-    drawCanvas();
-}
-
-void moveHandler(Event &e)
-{
-    /*
-     * Scroll tile
-     */
-    centering_mode = false;
-
-    int diff_x = e.to.x - e.from.x;
-    int diff_y = e.to.y - e.from.y;
-
-    display_center_idx_coords.idx_x -= diff_x;
-    display_center_idx_coords.idx_y -= diff_y;
-
-    drawCanvas();
-
-    if (VERBOSE)
-    {
-        Serial.printf("moveHandler(): display_center_idx_coords (x=%d,y=%d)", display_center_idx_coords.idx_x, display_center_idx_coords.idx_y);
-        Serial.printf("  diff (x=%d,y=%d)\n", diff_x, diff_y);
-    }
-}
-
-void toggleBrightnessHandler(Event &e)
-{
-    if (VERBOSE)
-    {
-        Serial.printf("toggleBrightnessHandler(): %d", brightness_list[i_brightness]);
-    }
-
-    i_brightness = (i_brightness + 1) % n_brightness;
-    lcd.setBrightness(brightness_list[i_brightness]);
-
-    if (VERBOSE)
-    {
-        Serial.printf("->%d", brightness_list[i_brightness]);
-    }
-}
-
-void smartTileLoadingHandler(Event &e)
-{
-    if (VERBOSE)
-    {
-        Serial.printf("smartTileLoadingHandler() is called.\n");
-    }
     smartTileLoading();
 }
 
-void setupButtonHandlers()
+void checkButtonEvents()
 {
-    M5.background.delHandlers();
+    if (M5.BtnA.wasClicked())
+    {
+        incrementBrightness();
+    }
 
-    M5.background.addHandler(moveHandler, E_MOVE);
-    M5.background.addHandler(smartTileLoadingHandler, E_RELEASE);
-    M5.BtnA.addHandler(toggleBrightnessHandler, E_RELEASE);
-    M5.BtnB.addHandler(zoomHandler, E_RELEASE);
-    M5.BtnC.addHandler(centeringHandler, E_RELEASE);
+    if (M5.BtnB.wasClicked())
+    {
+        changeZoomLevel();
+    }
+
+    if (M5.BtnC.wasClicked())
+    {
+        if (centering_mode)
+        {
+            if (bt_user_switch)
+            {
+                disableBt();
+            }
+            else
+            {
+                enableBt();
+            }
+        }
+        else
+        {
+            enableCentering();
+        }
+    }
 }
 
 // ========================================
@@ -1594,19 +1771,17 @@ void setupButtonHandlers()
 void setup(void)
 {
     // Initialization
-    // M5.begin(bool LCDEnable = true, bool SDEnable = true, bool SerialEnable = true, bool I2CEnable = false, mbus_mode_t mode = kMBusModeOutput);
-    // kMBusModeOutput: powered by USB or Battery
-    // KMBusModeInput: powered by 5-12V external
-    M5.begin(true, false, true, false, kMBusModeOutput);
-    lcd.init();
-    lcd.setRotation(1);
-    lcd.setBrightness(brightness_list[i_brightness]);
+    auto cfg = M5.config();
+    M5.begin(cfg);
 
-    lcd.setTextSize(2);
-    lcd.println("Initializing");
+    M5.Display.init();
+    M5.Display.setRotation(1);
+    M5.Display.setBrightness(brightness_list[i_brightness]);
+    M5.Display.setTextSize(2);
+    M5.Display.println("Initializing");
 
     // Serial connection for debug
-    Serial.println("Initializing cycle_navi");
+    Serial.println("Initializing");
 
     // Initialize the SD card.
     if (!sd.begin(SD_CONFIG))
@@ -1618,6 +1793,7 @@ void setup(void)
     use_sound = checkIfUseSound();
     if (use_sound)
     {
+        M5.Speaker.begin();
         playBoot();
     }
 
@@ -1628,10 +1804,6 @@ void setup(void)
     initGPSIcon();
     initDirIcon();
     initBTIcon();
-    // initUpdatingIcon();
-
-    // Initializing button handlers
-    setupButtonHandlers();
 
     // Set initial map variables (The tokyo station)
     initMapVariables();
@@ -1645,8 +1817,13 @@ void setup(void)
     SerialBT.enableSSP();
     SerialBT.onAuthComplete(BTAuthCompleteCallback);
     SerialBT.begin(BT_DEVICE_NAME, true); // Bluetooth device name
+    if (REMOVE_BONDED_DEVICES)
+    {
+        removeAllBondedDevices();
+    }
 
-    Serial.println("Waiting GPS signals...");
+    Serial.println("  Initialization finished");
+    Serial.println("  Waiting GPS signals...");
     t_prev = millis();
 }
 
@@ -1655,27 +1832,27 @@ void loop()
     checkGPS();
 
     updateTileCache();
-    drawCanvas();
     smartTileLoading();
+    drawCanvas();
 
-    Serial.printf("SerialBT.connected(): %d\n", SerialBT.connected());
-    if (!SerialBT.connected() && (millis() - bt_last_discover_ms) > bt_discover_interval_ms)
-    {
-        BTTryToConnectSPP();
-        bt_last_discover_ms = millis();
-    }
+    checkBTconnection();
 
     do // Smart delay
     {
         // Update button & touch screen
         M5.update();
+        auto t = M5.Touch.getDetail();
+
+        checkTouchMoveEvent();
+        checkButtonEvents();
 
         // Feed GPS parser
-        while (SerialBT.available() > 0)
+        while (t.isReleased() && SerialBT.available() > 0)
         {
             gps.encode(SerialBT.read());
         }
         t_curr = millis();
     } while (t_curr - t_prev < interval_ms);
+
     t_prev = t_curr;
 }
