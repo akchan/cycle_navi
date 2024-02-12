@@ -222,14 +222,16 @@ def lonlat_list2idx_list(lonlat_list: list[list[float, float]],
                          tile_size=256) -> list[TileIndex]:
     idx_list = []
 
+    zoom_for_conv = int(zoom + np.log2(tile_size))
+
     for lon, lat in lonlat_list:
-        zoom, idx_x, idx_y = lonlat2idx(lon, lat, zoom)
+        zoom, idx_x, idx_y = lonlat2idx(lon, lat, zoom_for_conv)
         idx_list.append(TileIndex(idx_x, idx_y, tile_size))
 
     return idx_list
 
 
-def remove_idx_duplication(idx_list: list[list[int, int]]):
+def remove_idx_duplication(idx_list: list[TileIndex]):
     if len(idx_list) <= 1:
         return idx_list
 
@@ -239,6 +241,7 @@ def remove_idx_duplication(idx_list: list[list[int, int]]):
     for tile_idx in idx_list[1:]:
         if tile_idx != tile_idx_prev:
             ret.append(tile_idx)
+
         tile_idx_prev = tile_idx
 
     return ret
@@ -410,17 +413,18 @@ def main(route_file_path,
     point_dat_dir_path = os.path.join(base_dir, point_dat_dir_path)
     init_point_path = os.path.join(base_dir, init_point_path)
     use_sound_path = os.path.join(base_dir, "useSound")
-    
+
     assert hasattr(target_zoom_level,
                    '__iter__'), 'target_zoom_level should be iterable.'
     target_zoom_level = sorted(map(lambda x: int(x), target_zoom_level))
     zoom_max = max(target_zoom_level)
 
     # Generate route_dat
+    route_lonlat_list = parse_route_coords_from_xml(route_file_path)
+
     if verbose:
         print("Generating route_dat...")
-
-    route_lonlat_list = parse_route_coords_from_xml(route_file_path)
+        print("  Points in", route_file_path, len(route_lonlat_list))
 
     for zoom in target_zoom_level:
         tile_idx_list = lonlat_list2idx_list(
@@ -430,6 +434,10 @@ def main(route_file_path,
 
         list_to_write = build_route_list_to_write(
             zoom, tile_idx_list, tile_size)
+
+        if verbose:
+            print("  Zoom level:", zoom)
+            print("    Points to write", len(list_to_write))
 
         write_route_dat(route_dat_dir_path, list_to_write)
 
@@ -461,9 +469,16 @@ def main(route_file_path,
 
         write_point_dat(point_dat_dir_path, list_to_write)
 
+        if verbose:
+            print("  Zoom level:", zoom)
+            print("    Number of points:", len(point_lonlat_list))
+
     # Generate use_sound file
     if use_sound:
         open(use_sound_path, 'w').close()
+    
+    if verbose:
+        print("Output path:", base_dir)
 
 
 if __name__ == '__main__':
