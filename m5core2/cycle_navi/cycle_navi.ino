@@ -36,8 +36,8 @@
 // Variables declaration
 // ================================================================================
 // Common
-#define CYCLE_NAVI_VERSION 202
-#define CYCLE_NAVI_VERSION_STRING "2.2"
+#define CYCLE_NAVI_VERSION 203
+#define CYCLE_NAVI_VERSION_STRING "2.3"
 #define SUCCESS 1
 #define ERROR 0
 #define VERBOSE 1 // Set non-zero for verbose log mode
@@ -45,7 +45,7 @@
 // Settings
 const unsigned long interval_sec = 1;
 const unsigned long bt_discover_interval_ms = 20 * 1000;
-const unsigned long smart_loading_delay_ms = 500;
+const unsigned long smart_loading_delay_ms = 350;
 const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
 const char route_dir_path[] = "/route_dat";
@@ -1829,13 +1829,19 @@ void setup(void)
 
 void loop()
 {
-    checkGPS();
+    M5.update();
+    auto t = M5.Touch.getDetail();
 
-    updateTileCache();
-    smartTileLoading();
-    drawCanvas();
+    if (t.isReleased())
+    {
+        checkGPS();
 
-    checkBTconnection();
+        updateTileCache();
+        smartTileLoading();
+        drawCanvas();
+
+        checkBTconnection();
+    }
 
     do // Smart delay
     {
@@ -1846,11 +1852,17 @@ void loop()
         checkTouchMoveEvent();
         checkButtonEvents();
 
-        // Feed GPS parser
-        while (t.isReleased() && SerialBT.available() > 0)
+        if (t.isReleased())
         {
-            gps.encode(SerialBT.read());
+            smartTileLoading();
+
+            // Feed GPS parser
+            while (t.isReleased() && SerialBT.available() > 0)
+            {
+                gps.encode(SerialBT.read());
+            }
         }
+
         t_curr = millis();
     } while (t_curr - t_prev < interval_ms);
 
