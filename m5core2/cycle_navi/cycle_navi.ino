@@ -1183,8 +1183,8 @@ void loadRoute(M5Canvas *sprite, int zoom, int tile_x, int tile_y)
                 point_x = read4BytesAsInt(file);
                 point_y = read4BytesAsInt(file);
 
-                // Conditions to avoid an inapproriate line occuring when comes
-                // back to the same tile
+                // Conditions to avoid an inapproriate line occuring when
+                // the route comes back to the same tile
                 if (isWithinTile(point_x, point_y, tile_size, tile_size) || isWithinTile(prev_point_x, prev_point_y, tile_size, tile_size))
                 {
                     drawLineWithStroke(sprite, prev_point_x,
