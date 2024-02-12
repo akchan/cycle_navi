@@ -33,9 +33,8 @@ ipython_config.py
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow
 __pypackages__/
 
-/gen_map_and_route/gsij_map_tile_cache/
 .vscode/
-/gen_map_and_route/map_route*
 
 *.kml
 *.gpx
+*/route_dat*
