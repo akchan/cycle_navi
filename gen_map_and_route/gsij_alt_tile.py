@@ -13,7 +13,6 @@
 # - https://maps.gsi.go.jp/development/ichiran.html
 #
 
-from collections import OrderedDict
 import os
 from pathlib import Path
 import shutil
