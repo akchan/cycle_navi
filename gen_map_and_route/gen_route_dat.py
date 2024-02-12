@@ -36,10 +36,10 @@ t_request_prev = time.time()  # for get_map_tile()
 
 def gen_output_dir(output_dir, basename):
     while True:
-        output_basename = datetime.datetime.now().strftime("{}_%Y%m%d_%H%M%S".format(basename))
-        output_dir_path = os.path.join(output_dir, output_basename)
+        basename_datetime = datetime.datetime.now().strftime(f"{basename}_%Y%m%d_%H%M%S")
+        output_dir_path = os.path.join(output_dir, basename_datetime)
 
-        if not os.path.isdir(output_dir_path):
+        if not os.path.exists(output_dir_path):
             os.makedirs(output_dir_path)
             break
 
@@ -49,8 +49,6 @@ def gen_output_dir(output_dir, basename):
 
 
 def parse_route_coords_from_xml(xml_tree):
-    coords = []
-
     file_type = xml_tree.getroot().tag[-3:]
 
     if file_type == 'gpx':
@@ -123,8 +121,6 @@ def parse_route_coords_from_kml(xml_tree):
 
 
 def parse_point_coords_from_xml(xml_tree):
-    coords = []
-
     file_type = xml_tree.getroot().tag[-3:]
 
     if file_type == 'gpx':
@@ -159,18 +155,13 @@ def parse_point_coords_from_kml(xml_tree):
 
 
 def is_neighbor_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y):
-    if (l_tile_x == r_tile_x and (np.abs(l_tile_y - r_tile_y) == 1)) \
-       or (l_tile_y == r_tile_y and (np.abs(l_tile_x - r_tile_x) == 1)):
-        return True
-
-    return False
+    condition_a = (l_tile_x == r_tile_x and (np.abs(l_tile_y - r_tile_y) == 1))
+    condition_b = (l_tile_y == r_tile_y and (np.abs(l_tile_x - r_tile_x) == 1))
+    return condition_a or condition_b
 
 
 def is_same_tile(l_tile_x, l_tile_y, r_tile_x, r_tile_y):
-    if l_tile_x == r_tile_x and l_tile_y == r_tile_y:
-        return True
-
-    return False
+    return l_tile_x == r_tile_x and l_tile_y == r_tile_y
 
 
 def force_neighbor_tile(tile_idx_list,
