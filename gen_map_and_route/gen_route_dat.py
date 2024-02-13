@@ -206,6 +206,9 @@ class TileIndex:
     def __ne__(self, other):
         return not self.__eq__(other)
 
+    def __repr__(self):
+        return f"TileIndex(idx_x={self.x}, idx_y={self.y}, tile_size={self.tile_size})"
+
     def is_neighbor(self, other):
         condition_a = np.abs(self.tile_x() - other.tile_x()
                              ) == 1 and self.tile_y() == other.tile_y()
@@ -215,6 +218,66 @@ class TileIndex:
 
     def is_same_tile(self, other):
         return self.tile_x() == other.tile_x() and self.tile_y() == other.tile_y()
+
+    def manhattan_distance_from_tile(self, other, verbose=False):
+        x_start = other.tile_x() * other.tile_size
+        x_end = x_start + other.tile_size - 1
+        dist_x = self.distance_from_interval(self.x, [x_start, x_end])
+
+        y_start = other.tile_y() * other.tile_size
+        y_end = y_start + other.tile_size - 1
+        dist_y = self.distance_from_interval(self.y, [y_start, y_end])
+        
+        if verbose:
+            print("x_start:", x_start)
+            print("x_end  :", x_end)
+            print("dist_x :", dist_x)
+            print("y_start:", y_start)
+            print("y_end  :", y_end)
+            print("dist_y :", dist_y)
+            print("dist   :", dist_x + dist_y)
+
+        return dist_x + dist_y
+
+    def distance_from_interval(self, point, interval):
+        start, end = interval
+
+        if point < start:
+            return start - point
+        elif start <= point and point <= end:
+            return 0
+        else:
+            return point - end
+
+    def neighbor_tiles(self):
+        tile_size = self.tile_size
+        root_x = self.tile_x() * tile_size
+        root_y = self.tile_y() * tile_size
+
+        neighbors = (
+            self.__class__(root_x - tile_size, root_y),
+            self.__class__(root_x + tile_size, root_y),
+            self.__class__(root_x, root_y - tile_size),
+            self.__class__(root_x, root_y + tile_size),
+            self.__class__(root_x - tile_size, root_y - tile_size),
+            self.__class__(root_x + tile_size, root_y - tile_size),
+            self.__class__(root_x - tile_size, root_y + tile_size),
+            self.__class__(root_x + tile_size, root_y + tile_size),
+        )
+
+        return neighbors
+
+    def get_neighbor_tiles_within(self, distance):
+        '''
+        distance: in manhattan distance
+        '''
+        ret = []
+
+        for tile in self.neighbor_tiles():
+            if self.manhattan_distance_from_tile(tile) <= distance:
+                ret.append(tile)
+
+        return ret
 
 
 def lonlat_list2idx_list(lonlat_list: list[list[float, float]],
@@ -264,6 +327,9 @@ def create_relay_points(tile_idx_list: list[TileIndex]):
 
 
 def create_relay_between(point1: TileIndex, point2: TileIndex) -> list[TileIndex]:
+    '''
+    Create relay points on the edge of the tiles
+    '''
     point1_x, point1_y = point1.xy()
     point2_x, point2_y = point2.xy()
     tile_size = point1.tile_size
@@ -294,7 +360,12 @@ def create_relay_between(point1: TileIndex, point2: TileIndex) -> list[TileIndex
     return coords
 
 
-def build_route_list_to_write(zoom, idx_list: list[TileIndex], tile_size=256):
+def build_route_list_to_write(zoom, idx_list: list[TileIndex],
+                              th_distance=15,
+                              tile_size=256):
+    '''
+    Add edge points to the neighbor tiles to reduce graphics error in cycle_navi.
+    '''
     tile_idx_list = []
 
     tile_idx_prev = idx_list[0]
@@ -476,7 +547,7 @@ def main(route_file_path,
     # Generate use_sound file
     if use_sound:
         open(use_sound_path, 'w').close()
-    
+
     if verbose:
         print("Output path:", base_dir)
 
