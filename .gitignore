@@ -38,3 +38,4 @@ __pypackages__/
 *.kml
 *.gpx
 */route_dat*
+gen_map_and_route/bench/
