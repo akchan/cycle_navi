@@ -227,7 +227,7 @@ class TileIndex:
         y_start = other.tile_y() * other.tile_size
         y_end = y_start + other.tile_size - 1
         dist_y = self.distance_from_interval(self.y, [y_start, y_end])
-        
+
         if verbose:
             print("x_start:", x_start)
             print("x_end  :", x_end)
@@ -255,14 +255,14 @@ class TileIndex:
         root_y = self.tile_y() * tile_size
 
         neighbors = (
-            self.__class__(root_x - tile_size, root_y),
-            self.__class__(root_x + tile_size, root_y),
-            self.__class__(root_x, root_y - tile_size),
-            self.__class__(root_x, root_y + tile_size),
-            self.__class__(root_x - tile_size, root_y - tile_size),
-            self.__class__(root_x + tile_size, root_y - tile_size),
-            self.__class__(root_x - tile_size, root_y + tile_size),
-            self.__class__(root_x + tile_size, root_y + tile_size),
+            self.__class__(root_x - tile_size, root_y, tile_size),
+            self.__class__(root_x + tile_size, root_y, tile_size),
+            self.__class__(root_x, root_y - tile_size, tile_size),
+            self.__class__(root_x, root_y + tile_size, tile_size),
+            self.__class__(root_x - tile_size, root_y - tile_size, tile_size),
+            self.__class__(root_x + tile_size, root_y - tile_size, tile_size),
+            self.__class__(root_x - tile_size, root_y + tile_size, tile_size),
+            self.__class__(root_x + tile_size, root_y + tile_size, tile_size),
         )
 
         return neighbors
@@ -368,41 +368,7 @@ def build_route_list_to_write(zoom, idx_list: list[TileIndex],
     '''
     tile_idx_list = []
 
-    tile_idx_prev = idx_list[0]
-    tile_idx_list.append([
-        zoom,
-        tile_idx_prev.tile_x(),
-        tile_idx_prev.tile_y(),
-        tile_idx_prev.idx_x_on_tile(),
-        tile_idx_prev.idx_y_on_tile(),
-    ])
-
-    for tile_idx in idx_list[1:]:
-        if not tile_idx.is_same_tile(tile_idx_prev):
-            # coordinates 1
-            # create coordinates outside the previous tile
-            rel_x, rel_y = tile_idx.idx_on_tile(relative_from=tile_idx_prev)
-
-            tile_idx_list.append([
-                zoom,
-                tile_idx_prev.tile_x(),
-                tile_idx_prev.tile_y(),
-                rel_x,
-                rel_y,
-            ])
-
-            # coordinates 2
-            # create coordinates outside the this tile
-            rel_x, rel_y = tile_idx_prev.idx_on_tile(relative_from=tile_idx)
-
-            tile_idx_list.append([
-                zoom,
-                tile_idx.tile_x(),
-                tile_idx.tile_y(),
-                rel_x,
-                rel_y,
-            ])
-
+    for tile_idx in idx_list:
         tile_idx_list.append([
             zoom,
             tile_idx.tile_x(),
@@ -411,7 +377,18 @@ def build_route_list_to_write(zoom, idx_list: list[TileIndex],
             tile_idx.idx_y_on_tile(),
         ])
 
-        tile_idx_prev = tile_idx
+        # When this point is near to the neighbor tile
+        tmp = tile_idx.get_neighbor_tiles_within(th_distance)
+        for tile in tmp:
+            rel_x, rel_y = tile.idx_on_tile(relative_from=tile)
+
+            tile_idx_list.append([
+                zoom,
+                tile.tile_x(),
+                tile.tile_y(),
+                rel_x,
+                rel_y,
+            ])
 
     return tile_idx_list
 
@@ -477,6 +454,7 @@ def main(route_file_path,
          init_point_path="./initPoint",
          use_sound=True,
          target_zoom_level=(8, 12, 14),
+         th_distance=15,
          tile_size=256,
          verbose=True):
     base_dir = gen_dir_with_timestamp("route_dat")
@@ -504,7 +482,7 @@ def main(route_file_path,
         tile_idx_list = create_relay_points(tile_idx_list)
 
         list_to_write = build_route_list_to_write(
-            zoom, tile_idx_list, tile_size)
+            zoom, tile_idx_list, th_distance=th_distance, tile_size=tile_size)
 
         if verbose:
             print("  Zoom level:", zoom)
