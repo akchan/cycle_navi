@@ -1,16 +1,8 @@
 # cycle_navi
 
-M5Stack Core2を使ったお手軽サイクリング用GPSナビのコードです。
+M5Stack Core2を使ったサイクリング用ナビのコードです。
 
-GPSモジュールは不要で、簡単に試していただけます。
-
-BluetoothでGPS情報をandroidスマートフォンやGPSレシーバなどの外部端末から受信することで
-内部にGPSモジュールやアンテナが必要ありません。
-
-Simple GPS navigation system using M5Stack Core2
-
-- Version 1 uses serialized NMEA GPS data from GPS module (e.g. M5Stack GPS module v2)
-- Version 2 uses external bluetooth SSP (serial port profile) GPS receiver
+Simple navigation system using M5Stack Core2
 
 ![](gen_map_and_route/overview.JPG)
 
@@ -18,7 +10,6 @@ Simple GPS navigation system using M5Stack Core2
 
 - Display current location based on GPS
 - Scroll the map using the touch screen of M5Stack Core2
-- Receive GPS data from an external GPS receiver via bluetooth (SSP, serial port profile)
 - Show planned routes using scripts in `gen_map_and_route`
 
 # Hardware
@@ -26,36 +17,24 @@ Simple GPS navigation system using M5Stack Core2
 ### Required
 
 - M5Stack Core2
+- M5Stack GPS module v2
 - M5Go for core2 bottom mobule
     - Use M3 screw on the bottom to mount M5Stack to the handle of your bicycle.
 - SD card (TF card)
     - formatted as exFAT with small allocation unit size (ex. 2048 byte/block)
     - If you use mac, use `newfs_exfat -b 2048 {device}` command instead of `Disk utility.app` which can't specify the allocation unit size.
-- Android phone or GPS receiver
-    - Source of GPS information
-    - This project reads the GPS NMEA message via bluetooth (SPP, serial port profile)
-    - You can use your android phones as a gps receiver via this App (GNSS2bluetooth) developed for this project.
-        - [https://github.com/akchan/cycle_navi/releases/tag/gnss2bluetooth](https://github.com/akchan/cycle_navi/releases/tag/gnss2bluetooth)
 
 ### Recommended
 
-- USB battery (for extended operating time)
-
-### How to use internal GPS module
-
-If you want to use a GPS module of M5Stack series, you should use version 1 and modules like below.
-
-- M5Stack GPS module v2
 - External GPS antena (for better signal)
+    - Active type of antenna is preferred.
+- USB battery (for extended operating time)
 
 # Sofrware requirements
 
-Install the required packages below via Arduino library manager before compile and upload this project to your device.
-
-- M5Stack Core2 board library (2.0.8)
+- M5Unified (0.1.12)
 - TinyGPSPlus (1.0.3)
 - SdFat (2.2.2)
-- LovyanGFX (1.1.12)
 
 # Usage
 

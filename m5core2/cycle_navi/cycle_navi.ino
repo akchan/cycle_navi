@@ -36,15 +36,14 @@
 // Variables declaration
 // ================================================================================
 // Common
-#define CYCLE_NAVI_VERSION 203
-#define CYCLE_NAVI_VERSION_STRING "2.3"
+#define CYCLE_NAVI_VERSION 300
+#define CYCLE_NAVI_VERSION_STRING "3.0"
 #define SUCCESS 1
 #define ERROR 0
 #define VERBOSE 1 // Set non-zero for verbose log mode
 
 // Settings
 const unsigned long interval_sec = 1;
-const unsigned long bt_discover_interval_ms = 20 * 1000;
 const unsigned long smart_loading_delay_ms = 350;
 const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
@@ -52,12 +51,11 @@ const char route_dir_path[] = "/route_dat";
 const char point_dir_path[] = "/point_dat";
 const char init_point_path[] = "/initPoint";
 #define TIMEZONE_HOUR 9
-#define REMOVE_ALL_BONDED_BT_DEVICES 0
+#define SERIAL_BAUDRATE_GPS 19200
 
 // Variables [Timers]
 unsigned long interval_ms = interval_sec * 1000;
 unsigned long t_prev, t_curr;
-unsigned long t_last_bt_discover = 0;
 unsigned long t_last_touch_move = 0;
 
 // Variables [GPS]
@@ -105,7 +103,6 @@ const int n_sprite = n_sprite_x * n_sprite_y;
 static M5Canvas canvas(&M5.Display); // screen buffer
 M5Canvas dir_icon(&canvas);
 M5Canvas gps_icon(&canvas);
-M5Canvas bt_icon(&canvas);
 struct sprite_struct
 {
     st_tile_coords tile_coords;
@@ -176,218 +173,6 @@ FsFile file;
 // M5Core2 shares SPI but between SD card and the LCD display
 #define TFCARD_CS_PIN 4
 #define SD_CONFIG SdSpiConfig(TFCARD_CS_PIN, SHARED_SPI, SPI_CLOCK)
-
-/* ================================================================================
- * Bluetooth
- * ================================================================================
- * Change RX_QUEUE_SIZE 512 -> 1024 in:
- *  (macOS) ~/Library/Arduino15/packages/m5stack/hardware/esp32/2.0.8/libraries/BluetoothSerial/src/BluetoohSerial.cpp
- *
- */
-#include <map>
-#include "esp_bt_main.h"
-#include "esp_bt_device.h"
-#include "esp_gap_bt_api.h"
-#include "esp_err.h"
-#include "BluetoothSerial.h" // install via Arduino library manager
-
-BluetoothSerial SerialBT;
-
-esp_spp_sec_t sec_mask = ESP_SPP_SEC_NONE; // or ESP_SPP_SEC_ENCRYPT|ESP_SPP_SEC_AUTHENTICATE to request pincode confirmation
-esp_spp_role_t role = ESP_SPP_ROLE_SLAVE;  // or ESP_SPP_ROLE_MASTER
-
-#define BT_DEVICE_NAME "ESP32 cycle_navi"
-#define REMOVE_BONDED_DEVICES false // Set true to reset pairing
-#define PAIR_MAX_DEVICES 20
-uint8_t pairedDeviceBtAddr[PAIR_MAX_DEVICES][6];
-char bda_str[18];
-bool bt_user_switch = true;
-
-void BTAuthCompleteCallback(boolean success)
-{
-    if (success)
-    {
-        Serial.println("[BT] Pairing success!!");
-    }
-    else
-    {
-        Serial.println("[BT] Pairing failed, rejected by user!!");
-    }
-}
-
-char *bda2str(const uint8_t *bda, char *str, size_t size)
-{
-    if (bda == NULL || str == NULL || size < 18)
-    {
-        return NULL;
-    }
-    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
-            bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
-    return str;
-}
-
-void BTTryToConnectSPP()
-{
-
-    int count = esp_bt_gap_get_bond_device_num();
-    if (!count)
-    {
-        Serial.println("[BT] No bonded device found.");
-    }
-    else
-    {
-        Serial.print("[BT] Bonded device count: ");
-        Serial.println(count);
-        if (PAIR_MAX_DEVICES < count)
-        {
-            count = PAIR_MAX_DEVICES;
-            Serial.print("[BT] Reset bonded device count: ");
-            Serial.println(count);
-        }
-        esp_err_t tError = esp_bt_gap_get_bond_device_list(&count, pairedDeviceBtAddr);
-        if (ESP_OK == tError)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                Serial.print("[BT] Found bonded device # ");
-                Serial.print(i);
-                Serial.print(" -> ");
-                Serial.println(bda2str(pairedDeviceBtAddr[i], bda_str, 18));
-
-                int channel = 0;
-                BTAddress bt_address(pairedDeviceBtAddr[i]);
-
-                std::map<int, std::string> channels = SerialBT.getChannels(bt_address);
-                Serial.printf("[BT] scanned for services, found %d\n", channels.size());
-                for (auto const &entry : channels)
-                {
-                    Serial.printf("[BT]      channel %d (%s)\n", entry.first, entry.second.c_str());
-                }
-                if (channels.size() > 0 && bt_address && !SerialBT.connected())
-                {
-                    channel = channels.begin()->first;
-                    Serial.printf("[BT] connecting to %s - %d\n", bt_address.toString().c_str(), channel);
-                    SerialBT.connect(bt_address, channel, sec_mask, role);
-                }
-            }
-        }
-    }
-}
-
-void removeAllBondedDevices()
-{
-    int count = esp_bt_gap_get_bond_device_num();
-    if (!count)
-    {
-        Serial.println("[BT] No bonded device found.");
-    }
-    else
-    {
-        Serial.print("[BT] Bonded device count: ");
-        Serial.println(count);
-        if (PAIR_MAX_DEVICES < count)
-        {
-            count = PAIR_MAX_DEVICES;
-            Serial.print("[BT] Reset bonded device count: ");
-            Serial.println(count);
-        }
-        esp_err_t tError = esp_bt_gap_get_bond_device_list(&count, pairedDeviceBtAddr);
-        if (ESP_OK == tError)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                Serial.print("[BT] Found bonded device # ");
-                Serial.print(i);
-                Serial.print(" -> ");
-                Serial.println(bda2str(pairedDeviceBtAddr[i], bda_str, 18));
-
-                esp_err_t tError = esp_bt_gap_remove_bond_device(pairedDeviceBtAddr[i]);
-                if (ESP_OK == tError)
-                {
-                    Serial.print("[BT] Removed bonded device # ");
-                }
-                else
-                {
-                    Serial.print("[BT] Failed to remove bonded device # ");
-                }
-                Serial.println(i);
-            }
-        }
-    }
-}
-
-void enableBt()
-{
-    if (VERBOSE)
-    {
-        Serial.println("enableBt()");
-    }
-    
-    bt_user_switch = true;
-    pushBtConnecting();
-    BTTryToConnectSPP();
-    t_last_bt_discover = millis();
-}
-
-void disableBt() {
-    if (VERBOSE)
-    {
-        Serial.println("disableBt()");
-    }
-    
-    bt_user_switch = false;
-    SerialBT.disconnect();
-}
-
-void pushBtConnecting(){
-    // [Memo]
-    // Character size
-    //   size 1: w6,  h8
-    //   size 2: w12, h16
-    //   size 3: w18, h24
-    const int pad = 3;
-    const int text_size = 2;
-    const int char_w = 12;
-    const int char_h = 16;
-    const int icon_w = 16;
-    const int icon_h = 16;
-    const int w = pad + 16 + pad + char_w * 10 + pad;
-    const int h = pad + char_h + pad;
-    const char text[] = "Connecting";
-
-    const int offset_x = M5.Display.width() / 2 - w / 2;
-    const int offset_y = M5.Display.height() / 2 - h / 2;
-
-    canvas.fillRect(offset_x, offset_y, w, h, TFT_BLACK);
-    bt_icon.pushSprite(offset_x + pad, offset_y + pad);
-
-    canvas.setCursor(offset_x + pad + icon_w + pad, offset_y + pad);
-    canvas.setTextSize(text_size);
-    canvas.setTextColor(WHITE, BLACK);
-    canvas.print(text);
-
-    canvas.pushSprite(0, 0);
-}
-
-void checkBTconnection()
-{
-    if (VERBOSE)
-    {
-        Serial.printf("checkBTconnection(): bt_user_switch=%d\n", bt_user_switch);
-    }
-
-    if (!bt_user_switch)
-    {
-        return;
-    }
-
-    if (!SerialBT.connected() && (t_last_bt_discover + bt_discover_interval_ms) < millis())
-    {
-        pushBtConnecting();
-        BTTryToConnectSPP();
-        t_last_bt_discover = millis();
-    }
-}
 
 /* ================================================================================
  * GPS
@@ -1406,19 +1191,6 @@ void pushButtonLabels()
         canvas.setCursor(241, canvas.height() - h + pad);
         canvas.print(" Center ");
     }
-    else
-    {
-        if (bt_user_switch)
-        {
-            canvas.setCursor(241, canvas.height() - h + pad);
-            canvas.print(" BT Off ");
-        }
-        else
-        {
-            canvas.setCursor(244, canvas.height() - h + pad);
-            canvas.print(" BT On ");
-        }
-    }
 }
 
 void initGPSIcon()
@@ -1430,15 +1202,6 @@ void initGPSIcon()
     gps_icon.drawPng((std::uint8_t *)satellite_icon_png, satellite_icon_png_len, 0, 0);
 }
 
-void initBTIcon()
-{
-    Serial.printf("initBTIcon(): Initializing Bluetooth icon\n");
-    bt_icon.setPsram(false);
-    bt_icon.createSprite(bluetooth_icon_png_width, bluetooth_icon_png_height);
-    bt_icon.fillSprite(TFT_WHITE);
-    bt_icon.drawPng((std::uint8_t *)bluetooth_icon_png, bluetooth_icon_png_len, 0, 0);
-}
-
 void pushInfoTopRight()
 {
     // [Memo] 12 x 18 = Character size in case of `canvas.setTextSize(2);`.
@@ -1446,8 +1209,7 @@ void pushInfoTopRight()
     const int pad = 1;
     const int clock_width = 12 * 5; // 5 characters
     const int gps_icon_width = satellite_icon_png_width;
-    const int bt_icon_width = bluetooth_icon_png_width;
-    const int w = pad + gps_icon_width + pad + bt_icon_width + clock_width + pad;
+    const int w = pad + gps_icon_width + clock_width + pad;
     const int h = pad + 16 + pad;
     char colon = ':';
 
@@ -1466,16 +1228,10 @@ void pushInfoTopRight()
                   colon,
                   time_utc.minutes);
 
-    // Bluetooth status
-    if (SerialBT.connected())
-    {
-        bt_icon.pushSprite(M5.Display.width() - (bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
-    }
-
     // GPS status
     if (is_gps_active)
     {
-        gps_icon.pushSprite(M5.Display.width() - (gps_icon_width + pad + bt_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
+        gps_icon.pushSprite(M5.Display.width() - (gps_icon_width + pad + clock_width + pad), pad, TFT_BLACK);
     }
 }
 
@@ -1747,18 +1503,7 @@ void checkButtonEvents()
 
     if (M5.BtnC.wasClicked())
     {
-        if (centering_mode)
-        {
-            if (bt_user_switch)
-            {
-                disableBt();
-            }
-            else
-            {
-                enableBt();
-            }
-        }
-        else
+        if (!centering_mode)
         {
             enableCentering();
         }
@@ -1783,6 +1528,9 @@ void setup(void)
     // Serial connection for debug
     Serial.println("Initializing");
 
+    // Serial for gps module
+    Serial2.begin(SERIAL_BAUDRATE_GPS, SERIAL_8N1, 13, 14);
+
     // Initialize the SD card.
     if (!sd.begin(SD_CONFIG))
     {
@@ -1803,7 +1551,6 @@ void setup(void)
     // Initializing small parts
     initGPSIcon();
     initDirIcon();
-    initBTIcon();
 
     // Set initial map variables (The tokyo station)
     initMapVariables();
@@ -1812,15 +1559,6 @@ void setup(void)
     initCanvas();
     initTileCache();
     updateTileCache();
-
-    // Initialize bluetooth
-    SerialBT.enableSSP();
-    SerialBT.onAuthComplete(BTAuthCompleteCallback);
-    SerialBT.begin(BT_DEVICE_NAME, true); // Bluetooth device name
-    if (REMOVE_BONDED_DEVICES)
-    {
-        removeAllBondedDevices();
-    }
 
     Serial.println("  Initialization finished");
     Serial.println("  Waiting GPS signals...");
@@ -1839,8 +1577,6 @@ void loop()
         updateTileCache();
         smartTileLoading();
         drawCanvas();
-
-        checkBTconnection();
     }
 
     do // Smart delay
@@ -1857,9 +1593,9 @@ void loop()
             smartTileLoading();
 
             // Feed GPS parser
-            while (t.isReleased() && SerialBT.available() > 0)
+            while (t.isReleased() && Serial2.available() > 0)
             {
-                gps.encode(SerialBT.read());
+                gps.encode(Serial2.read());
             }
         }
 
