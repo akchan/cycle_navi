@@ -44,14 +44,14 @@
 
 // Settings
 const unsigned long interval_sec = 1;
-const unsigned long smart_loading_delay_ms = 350;
+const unsigned long smart_loading_delay_ms = 370;
 const float is_moved_cutoff_m = 0.7;
 const char map_dir_path[] = "/map";
 const char route_dir_path[] = "/route_dat";
 const char point_dir_path[] = "/point_dat";
 const char init_point_path[] = "/initPoint";
 #define TIMEZONE_HOUR 9
-#define SERIAL_BAUDRATE_GPS 19200
+#define SERIAL_BAUDRATE_GPS 38400  // 9600 for M8N, 38400 for M9N
 
 // Variables [Timers]
 unsigned long interval_ms = interval_sec * 1000;
